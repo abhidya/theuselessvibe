@@ -1,0 +1,44 @@
+name: Report a website or request removal
+description: Report a broken link, content concern, licensing issue, incorrect match, or removal request.
+title: '[Site report] '
+body:
+  - type: input
+    id: site-url
+    attributes:
+      label: Website URL
+      description: The GitHub Pages website involved.
+      placeholder: https://owner.github.io/project/
+    validations:
+      required: true
+  - type: input
+    id: source-repository
+    attributes:
+      label: Source repository
+      placeholder: https://github.com/owner/project
+    validations:
+      required: true
+  - type: dropdown
+    id: reason
+    attributes:
+      label: What should we look at?
+      options:
+        - Website is unavailable or broken
+        - Search result is misleading or not a game
+        - Codex / Claude attribution is incorrect
+        - Duplicate or copied project
+        - Licensing or ownership concern
+        - Harmful or inappropriate content
+        - Request removal from the directory
+        - Other problem
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Tell us what happened, when you checked, and what you would like changed. Do not post passwords, tokens, or private information.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: Reports are reviewed by the directory maintainer. A removal affects this directory, not the original repository or website.

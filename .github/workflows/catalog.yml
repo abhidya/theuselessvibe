@@ -1,0 +1,87 @@
+name: Collect and deploy
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      refresh:
+        description: Start a fresh scan, reusing recent website checks
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-and-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Test collector and browser catalog
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py'
+          node --test tests/*.test.mjs
+      - name: Restore latest SQLite checkpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .cache
+          prior_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=catalog-checkpoint&per_page=100" --jq '[.artifacts[] | select(.expired == false) | select(.workflow_run.head_branch == "main")] | sort_by(.created_at) | last | .workflow_run.id // empty')
+          if [ -n "$prior_run" ]; then
+            gh run download "$prior_run" --repo "$GITHUB_REPOSITORY" --name catalog-checkpoint --dir .cache
+          fi
+      - name: Collect a resumable batch and export static files
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          START_FRESH: ${{ inputs.refresh == true && 'true' || 'false' }}
+        run: |
+          args=()
+          if [ "$START_FRESH" = "true" ]; then args+=(--refresh); fi
+          python3 scripts/collect.py --config config/search.json --state .cache/catalog.sqlite --output site/data --max-seconds 900 --retry-unresolved "${args[@]}"
+      - name: Preserve SQLite progress
+        if: ${{ always() && hashFiles('.cache/catalog.sqlite') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: catalog-checkpoint
+          path: .cache/catalog.sqlite
+          if-no-files-found: error
+          retention-days: 90
+          include-hidden-files: true
+      - name: Validate exported catalog
+        run: python3 scripts/check_export.py site/data
+      - name: Package website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Publish GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

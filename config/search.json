@@ -1,0 +1,15 @@
+{
+  "baseQuery": "\"github.io\" in:readme stars:<2 license:mit",
+  "phrases": [
+    "play online",
+    "play in browser",
+    "play in your browser",
+    "start game",
+    "new game",
+    "arrow keys",
+    "WASD"
+  ],
+  "sort": "updated",
+  "verificationMaxAgeDays": 7,
+  "attributionMaxAgeDays": 7
+}
