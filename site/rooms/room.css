@@ -1,0 +1,24 @@
+/* Bootstrap supplies controls and typography; this file only lays out the player. */
+:root { color-scheme: light; }
+body { margin: 0; background: #fafaf8; color: #242924; }
+[hidden] { display: none !important; }
+.room-shell { height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.room-header { grid-row: 1; display: flex; align-items: center; padding-top: max(.5rem, env(safe-area-inset-top)) !important; }
+.room-heading { flex: 1; min-width: 0; }
+.room-heading h1, .room-heading p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-status { grid-row: 2; max-height: 7rem; overflow: auto; background: #f1f3ee; }
+.game-stage { grid-row: 3; min-height: 0; position: relative; }
+.room-welcome { height: 100%; display: grid; place-items: center; overflow: auto; }
+.frame-host, .frame-host iframe { height: 100%; width: 100%; border: 0; display: block; background: white; }
+.room-nav { grid-row: 4; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding-bottom: max(.5rem, env(safe-area-inset-bottom)) !important; background: #fafaf8; }
+.room-nav button { width: 100%; min-width: 0; white-space: nowrap; }
+.room-header button, .room-header a, .room-nav button, dialog .btn, dialog .list-group-item { min-height: 44px; }
+.room-header button, .room-header a { flex-shrink: 0; }
+dialog { width: min(440px, calc(100% - 24px)); max-height: calc(100dvh - 32px); overflow: auto; border: 1px solid #dce1d8; border-radius: 16px; padding: 20px; background: #fff; color: #242924; }
+dialog::backdrop { background: rgb(18 24 18 / 45%); }
+dialog .btn-close { min-width: 44px; min-height: 44px; padding: 0; background-position: center; }
+#room-code { text-transform: uppercase; min-width: 0; }
+#history-list button { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+#history-list small { display: block; }
+@media (max-width: 380px) { .room-nav button { font-size: .875rem; padding-inline: .25rem; } .room-header { gap: .25rem !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }

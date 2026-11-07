@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fafaf8">
+  <meta name="referrer" content="no-referrer">
+  <title>Play in a room — The Useless Vibe</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="rooms/room.css">
+  <script type="module" src="rooms/page.js"></script>
+</head>
+<body>
+  <div class="room-shell">
+    <header class="room-header border-bottom p-2 gap-2">
+      <a class="btn btn-light" href="./" aria-label="Back to the game collection">←</a>
+      <div class="room-heading">
+        <h1 id="game-title" class="fs-6 mb-0 text-truncate">Play together, at your own pace</h1>
+        <p id="room-label" class="small text-body-secondary mb-0 text-truncate">Same room code. Same game order.</p>
+      </div>
+      <button id="room-menu" class="btn btn-outline-secondary" type="button">Room</button>
+      <button id="more-menu" class="btn btn-light" type="button" aria-label="More game actions">⋯</button>
+    </header>
+    <p id="room-status" class="room-status small m-0 px-3 py-2" role="status" aria-live="polite" hidden></p>
+    <main id="game-stage" class="game-stage">
+      <section id="welcome" class="room-welcome p-4 text-center">
+        <div>
+          <h2 class="fs-3">One code. The same discoveries.</h2>
+          <p class="text-body-secondary">Enter the same room code as your friends.<br>You each decide when to press Next.</p>
+          <button id="welcome-join" class="btn btn-danger btn-lg" type="button">Join a room</button>
+        </div>
+      </section>
+      <div id="frame-host" class="frame-host" hidden></div>
+    </main>
+    <nav class="room-nav border-top p-2 gap-2" aria-label="Game navigation">
+      <button id="previous-game" class="btn btn-outline-secondary" type="button" disabled>← Previous</button>
+      <button id="show-history" class="btn btn-light" type="button" disabled>History</button>
+      <button id="next-game" class="btn btn-danger" type="button" disabled>Next →</button>
+    </nav>
+  </div>
+
+  <dialog id="room-dialog" aria-labelledby="room-dialog-title">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 id="room-dialog-title" class="fs-5 mb-0">Room</h2>
+      <button type="button" class="btn-close" data-close="room-dialog" aria-label="Close room settings"></button>
+    </div>
+    <form id="join-form">
+      <label class="form-label" for="room-code">Room code</label>
+      <div class="d-flex gap-2">
+        <input id="room-code" class="form-control" name="room" placeholder="PIZZA" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9-]{0,23}" required autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="code-help">
+        <button id="join-room" class="btn btn-danger" type="submit">Join</button>
+      </div>
+      <p id="code-help" class="small text-body-secondary mt-2">Use 1–24 letters, numbers, or hyphens. No account or host needed.</p>
+    </form>
+    <p id="room-feedback" class="small" role="status" aria-live="polite"></p>
+    <section id="active-settings" hidden>
+      <hr>
+      <p id="active-room" class="fw-semibold mb-2"></p>
+      <button id="share-room" class="btn btn-outline-secondary w-100 mb-3" type="button">Copy room link</button>
+      <label id="share-link-label" class="form-label small" for="share-link" hidden>Room link</label>
+      <input id="share-link" class="form-control mb-3" readonly hidden>
+      <div class="form-check form-switch">
+        <input id="auto-rotate" class="form-check-input" type="checkbox" role="switch">
+        <label class="form-check-label" for="auto-rotate">Auto-rotate every minute</label>
+      </div>
+      <p class="small text-body-secondary mt-2">Off by default. Friends who turn it on see the same clock-selected game. Previous, Next, or History pauses it on your device.</p>
+      <p class="small text-body-secondary">Use the shared link to match the catalog edition. Rooms share an order, not gameplay or other people’s button presses.</p>
+      <button id="leave-room" class="btn btn-link text-body-secondary px-0" type="button">Leave room</button>
+    </section>
+    <button id="current-edition" class="btn btn-outline-secondary w-100" type="button" hidden>Join the current catalog edition</button>
+  </dialog>
+
+  <dialog id="history-dialog" aria-labelledby="history-title">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 id="history-title" class="fs-5 mb-0">Recently played in this room</h2>
+      <button type="button" class="btn-close" data-close="history-dialog" aria-label="Close history"></button>
+    </div>
+    <div id="history-list" class="list-group"></div>
+  </dialog>
+
+  <dialog id="more-dialog" aria-labelledby="more-title">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h2 id="more-title" class="fs-5 mb-0">Game actions</h2>
+      <button type="button" class="btn-close" data-close="more-dialog" aria-label="Close game actions"></button>
+    </div>
+    <div id="game-actions" class="d-grid gap-2" hidden>
+      <a id="open-directly" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer">Open game directly ↗</a>
+      <a id="star-repo" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer">☆ Star on GitHub</a>
+      <a id="report-game" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer">Report / request removal</a>
+    </div>
+    <p class="small text-body-secondary mt-3">Some sites block embedded players. Use Open game directly when a game is blank or does not work. Going back reloads the game; this site cannot save progress inside other people’s games.</p>
+  </dialog>
+  <noscript><p class="p-3">Rooms need JavaScript. <a href="./">Return to the collection.</a></p></noscript>
+</body>
+</html>
