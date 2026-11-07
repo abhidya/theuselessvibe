@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "generation": "initial",
+  "query": "\"github.io\" in:readme stars:<2 license:mit",
+  "searchUrl": "https://github.com/search?q=%22github.io%22+in%3Areadme+stars%3A%3C2+license%3Amit&type=repositories&s=updated&o=desc",
+  "generatedAt": "2026-11-06T00:00:00Z",
+  "matchedRepositories": null,
+  "scannedRepositories": 0,
+  "eligibleSites": 0,
+  "complete": false,
+  "shardSize": 256,
+  "indexKey": "initial/index.json",
+  "shards": [],
+  "agentCounts": {
+    "codex": 0,
+    "claude": 0
+  },
+  "terms": [
+    "play online",
+    "play in browser",
+    "play in your browser",
+    "start game",
+    "new game",
+    "arrow keys",
+    "wasd"
+  ],
+  "termCounts": {},
+  "pendingAttributionChecks": 0,
+  "carriedForwardSites": 0
+}

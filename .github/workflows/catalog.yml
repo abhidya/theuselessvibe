@@ -1,10 +1,6 @@
 name: Collect and deploy
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
       refresh:
