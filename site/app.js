@@ -23,6 +23,8 @@ const state = {
   activeSite: null,
   playerRequest: 0,
   playerReturnFocus: null,
+  trail: null,
+  historyOpen: false,
 };
 let searchTimer;
 
@@ -144,7 +146,7 @@ function siteCard(site, index) {
   visit.addEventListener("click", (event) => {
     if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
       event.preventDefault();
-      openPlayer(site);
+      navigateToGame(site);
     }
   });
   visit.setAttribute("aria-label", `${name} — open website in a new tab`);
@@ -379,6 +381,45 @@ function playerVisible() {
   return !$("game-player").hidden;
 }
 
+function updateHistoryControls() {
+  const trail = state.trail;
+  $("player-previous").disabled = !trail?.canPrevious;
+  $("player-history").disabled = !trail?.entries.length;
+  $("player-history").setAttribute("aria-expanded", String(state.historyOpen));
+  $("player-history-count").textContent = String(trail?.entries.length || 0);
+}
+function renderHistory() {
+  const list = $("player-history-list");
+  list.replaceChildren();
+  const entries = state.trail?.entries || [];
+  entries.forEach((site, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "player-history-item";
+    button.classList.toggle("is-current", index === state.trail.cursor);
+    button.setAttribute("aria-current", index === state.trail.cursor ? "true" : "false");
+    const name = document.createElement("strong");
+    name.textContent = site.name;
+    const source = document.createElement("small");
+    source.textContent = site.repo;
+    button.append(name, source);
+    button.addEventListener("click", () => navigateHistory(index));
+    list.append(button);
+  });
+  $("player-history-empty").hidden = entries.length > 0;
+  updateHistoryControls();
+}
+function setHistoryDrawer(open) {
+  state.historyOpen = Boolean(open);
+  $("player-history-drawer").hidden = !state.historyOpen;
+  if (state.historyOpen) {
+    renderHistory();
+    $("player-history-close").focus({preventScroll:true});
+  } else {
+    $("player-history").focus({preventScroll:true});
+  }
+  updateHistoryControls();
+}
 function openPlayer(site) {
   if (!validSite(site)) return;
   if (!playerVisible()) state.playerReturnFocus = document.activeElement;
@@ -394,24 +435,68 @@ function openPlayer(site) {
   document.body.classList.add("player-active");
   $("player-loading").hidden = false;
   $("player-loading").textContent = "Loading your next detour…";
-  // The frame remains isolated from the directory; source sites never receive tokens.
   $("player-frame").src = checkedURL(site.url, "site");
   $("player-next").focus({ preventScroll: true });
+  renderHistory();
 }
-
-function closePlayer() {
+function showHome() {
   state.playerRequest++;
   state.activeSite = null;
+  state.historyOpen = false;
+  $("player-history-drawer").hidden = true;
   $("game-player").hidden = true;
   $("game-player").setAttribute("aria-hidden", "true");
   document.body.classList.remove("player-active");
-  // Stop audio, animation, and network activity in the previous game.
   $("player-frame").removeAttribute("src");
   $("player-loading").hidden = true;
   const focus = state.playerReturnFocus;
   if (focus && focus.isConnected) focus.focus({ preventScroll: true });
   else $("random-button").focus({ preventScroll: true });
   state.playerReturnFocus = null;
+}
+function historyUrl(site) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("play");
+  if (site) url.searchParams.set("play", site.id);
+  return url.pathname + url.search + url.hash;
+}
+function navigateToGame(site) {
+  if (!validSite(site)) return;
+  state.playerRequest++;
+  state.trail.visit(site);
+  history.pushState({uselessVibe:1, id:site.id}, "", historyUrl(site));
+  state.historyOpen = false;
+  $("player-history-drawer").hidden = true;
+  showSelection(site);
+  openPlayer(site);
+}
+function navigateHistory(index) {
+  const entry = state.trail.goto(index);
+  if (!entry) return;
+  state.playerRequest++;
+  history.pushState({uselessVibe:1,id:entry.id}, "", historyUrl(entry));
+  state.historyOpen = false;
+  $("player-history-drawer").hidden = true;
+  showSelection(entry);
+  openPlayer(entry);
+}
+function closePlayer() {
+  history.pushState({uselessVibe:1, id:null}, "", historyUrl(null));
+  showHome();
+}
+function restoreNavigation(event) {
+  const id = event?.state?.uselessVibe === 1 ? event.state.id
+    : new URL(window.location.href).searchParams.get("play");
+  if (typeof id === "string" && state.trail?.byId(id)) {
+    state.playerRequest++;
+    const site = state.trail.current;
+    state.historyOpen = false;
+    $("player-history-drawer").hidden = true;
+    showSelection(site);
+    openPlayer(site);
+  } else {
+    showHome();
+  }
 }
 
 async function takeDetour() {
@@ -428,12 +513,18 @@ async function takeDetour() {
   }
   const revision = state.revision;
   try {
-    const response = await state.adapter.randomSite(filters());
+    let response;
+    const recent = state.trail?.recentIds || new Set();
+    // Avoid recent repeats when the matching catalog contains alternatives.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      response = await state.adapter.randomSite(filters());
+      if (!recent.has(response?.site?.id) || state.total <= recent.size) break;
+    }
     if (request !== state.playerRequest || revision !== state.revision) return;
     const site = response?.site;
     if (!validSite(site)) throw new Error("No valid game available");
     showSelection(site);
-    openPlayer(site);
+    navigateToGame(site);
     $("random-status").textContent = "";
   } catch {
     if (request !== state.playerRequest) return;
@@ -451,12 +542,21 @@ async function takeDetour() {
 
 function bindEvents() {
   $("random-button").addEventListener("click", takeDetour);
-  $("player-next").addEventListener("click", takeDetour);
+  $("player-next").addEventListener("click", () => {
+    if (state.trail?.canForward) navigateHistory(state.trail.cursor + 1);
+    else void takeDetour();
+  });
+  $("player-previous").addEventListener("click", () => { if (state.trail?.canPrevious) navigateHistory(state.trail.cursor - 1); });
+  $("player-history").addEventListener("click", () => setHistoryDrawer(!state.historyOpen));
+  $("player-history-close").addEventListener("click", () => setHistoryDrawer(false));
+  window.addEventListener("popstate", restoreNavigation);
   $("player-close").addEventListener("click", closePlayer);
   $("player-frame").addEventListener("load", () => { if (playerVisible()) $("player-loading").hidden = true; });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && playerVisible()) closePlayer();
-    if (event.key === "ArrowRight" && event.altKey && playerVisible()) { event.preventDefault(); void takeDetour(); }
+    if (event.key === "Escape" && state.historyOpen) { event.preventDefault(); setHistoryDrawer(false); }
+    else if (event.key === "Escape" && playerVisible()) closePlayer();
+    if (event.key === "ArrowRight" && event.altKey && playerVisible()) { event.preventDefault(); if (state.trail?.canForward) navigateHistory(state.trail.cursor + 1); else void takeDetour(); }
+    if (event.key === "ArrowLeft" && event.altKey && playerVisible() && state.trail?.canPrevious) { event.preventDefault(); navigateHistory(state.trail.cursor - 1); }
   });
   $("load-more").addEventListener("click", () => void loadPage());
   $("retry-button").addEventListener("click", () => state.adapter ? void loadPage({ reset: true }) : void initialize());
@@ -533,6 +633,13 @@ async function initialize() {
   }
 }
 
+async function startApp() {
+  const {createTrail} = await import("./trail.js");
+  state.trail = createTrail(window.localStorage);
+  bindEvents();
+  await initialize();
+  // Browser refresh and Back/Forward restore the most recent selected game.
+  restoreNavigation({state:history.state});
+}
 renderTerms();
-bindEvents();
-void initialize();
+void startApp();

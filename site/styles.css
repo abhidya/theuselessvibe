@@ -285,3 +285,19 @@ h1{font-size:clamp(55px,7.5vw,94px);line-height:1.04;letter-spacing:-4px;color:#
 .site-footer{border-top:1px solid #e2e9df}
 @media(max-width:800px){.hero{grid-template-columns:1fr}.filter-main{width:100%}.filters{gap:9px}.advanced-discovery{flex-basis:145px}.section-heading{gap:14px}}
 @media(max-width:600px){.hero{padding-block:73px 80px}h1{letter-spacing:-2.8px;font-size:clamp(46px,11vw,62px)}.random-button{min-height:70px}.button-main{font-size:22px}.advanced-discovery{flex-basis:140px}.filters{margin:24px 0}.filter-main{min-width:calc(100% - 160px)}.advanced-panel{right:0}.section-heading>.text-link{margin-top:0}.directory{padding-top:50px}}
+
+/* Game session navigation: keep controls above the third-party iframe. */
+.game-player-prev,.game-player-history{padding:0 12px;background:#2c3932;color:#f4f6f1;border:1px solid #516253}
+.game-player-prev:disabled,.game-player-history:disabled{opacity:.42;cursor:not-allowed}
+.game-player-history span{display:inline-block;margin-left:5px;color:#b7c6b8}
+.player-history-drawer{position:absolute;right:14px;top:74px;z-index:210;width:min(400px,calc(100vw - 28px));max-height:min(65vh,550px);display:flex;flex-direction:column;border:1px solid #394a3e;border-radius:12px;background:#fdfefa;color:#263327;box-shadow:0 22px 60px #0006;overflow:hidden}
+.player-history-heading{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #e4e9e2}
+.player-history-heading button{border:0;background:transparent;font-size:18px;color:#516151}
+.player-history-list{overflow:auto;overscroll-behavior:contain}
+.player-history-item{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px 18px;border:0;border-bottom:1px solid #edf0ea;background:white;width:100%;text-align:left}
+.player-history-item:hover,.player-history-item.is-current{background:#edf4e9}
+.player-history-item strong{font-size:13px;max-width:100%;overflow-wrap:anywhere}
+.player-history-item small{color:#758175;font-size:11px;overflow-wrap:anywhere}
+.player-history-empty{margin:18px;color:#788677;font-size:12px}
+@media(max-width:720px){.player-history-drawer{top:113px}.game-player-prev,.game-player-history{padding:0 7px}}
+@media(max-width:390px){.game-player-open{display:none!important}.game-player-controls{flex-wrap:wrap}.game-player-controls .game-player-next{min-width:100px}}
