@@ -16,9 +16,9 @@ test('embedded game player has always-visible next, close, star, report and dire
 });
 
 test('random discovery and directory clicks stay inside the site', () => {
-  assert.match(js, /\$\("player-next"\)\.addEventListener\("click", takeDetour\)/);
+  assert.match(js, /\$\("player-next"\)\.addEventListener\("click", \(\) =>/);
   assert.match(js, /visit\.addEventListener\("click"/);
-  assert.match(js, /openPlayer\(site\)/);
+  assert.match(js, /navigateToGame\(site\)/);
   assert.doesNotMatch(js, /window\.open\("about:blank"/);
 });
 
