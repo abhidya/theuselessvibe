@@ -20,6 +20,9 @@ const state = {
   generation: null,
   loading: false,
   randomBusy: false,
+  activeSite: null,
+  playerRequest: 0,
+  playerReturnFocus: null,
 };
 let searchTimer;
 
@@ -138,6 +141,12 @@ function siteCard(site, index) {
   const heading = document.createElement("h3");
   const name = text(site.name, site.repo.split("/").pop() || "Untitled site");
   const visit = externalLink(name, checkedURL(site.url, "site"), "card-site-link");
+  visit.addEventListener("click", (event) => {
+    if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+      event.preventDefault();
+      openPlayer(site);
+    }
+  });
   visit.setAttribute("aria-label", `${name} — open website in a new tab`);
   heading.append(visit);
   const repo = externalLink(site.repo, canonicalRepositoryURL(site), "card-repo");
@@ -218,7 +227,7 @@ function setBusy() {
   } else {
     $("random-button-label").textContent = hasFilters() ? "Try a different set of filters" : "Waiting for little discoveries";
   }
-  $("random-note").textContent = hasFilters() ? "Your filters shape the next detour. Opens a new tab." : "One random website. A new tab. A happy detour.";
+  $("random-note").textContent = hasFilters() ? "Your filters shape the next detour. Play it here and hit Next." : "One random game, right here. Keep pressing Next.";
   $("load-more").disabled = state.loading;
   $("load-more").textContent = state.loading ? "Looking a little further…" : "More little discoveries ↓";
   $("clear-filters").hidden = !hasFilters();
@@ -366,59 +375,89 @@ function showSelection(site) {
   $("selection").hidden = false;
 }
 
+function playerVisible() {
+  return !$("game-player").hidden;
+}
+
+function openPlayer(site) {
+  if (!validSite(site)) return;
+  if (!playerVisible()) state.playerReturnFocus = document.activeElement;
+  state.activeSite = site;
+  $("player-name").textContent = text(site.name, site.repo);
+  $("player-repo").textContent = site.repo;
+  $("player-direct").href = checkedURL(site.url, "site");
+  $("player-star").href = canonicalRepositoryURL(site);
+  $("player-report").href = reportURL(site);
+  $("player-frame").title = `Game: ${text(site.name, site.repo)}`;
+  $("game-player").hidden = false;
+  $("game-player").setAttribute("aria-hidden", "false");
+  document.body.classList.add("player-active");
+  $("player-loading").hidden = false;
+  $("player-loading").textContent = "Loading your next detour…";
+  // The frame remains isolated from the directory; source sites never receive tokens.
+  $("player-frame").src = checkedURL(site.url, "site");
+  $("player-next").focus({ preventScroll: true });
+}
+
+function closePlayer() {
+  state.playerRequest++;
+  state.activeSite = null;
+  $("game-player").hidden = true;
+  $("game-player").setAttribute("aria-hidden", "true");
+  document.body.classList.remove("player-active");
+  // Stop audio, animation, and network activity in the previous game.
+  $("player-frame").removeAttribute("src");
+  $("player-loading").hidden = true;
+  const focus = state.playerReturnFocus;
+  if (focus && focus.isConnected) focus.focus({ preventScroll: true });
+  else $("random-button").focus({ preventScroll: true });
+  state.playerReturnFocus = null;
+}
+
 async function takeDetour() {
   if (!state.adapter || state.randomBusy || state.loading || state.total === 0) return;
   state.randomBusy = true;
+  const request = ++state.playerRequest;
   setBusy();
-  $("random-status").textContent = "Choosing a little corner of the internet…";
-  const revision = state.revision;
-  // Opening during the click keeps the new tab inside the browser's user gesture.
-  // Sever the opener before navigating it to any external website.
-  let popup = null;
-  try {
-    popup = window.open("about:blank", "_blank");
-    if (popup) {
-      popup.opener = null;
-      popup.document.title = "Finding your next detour…";
-    }
-  } catch {
-    if (popup && !popup.closed) popup.close();
-    popup = null;
+  if (playerVisible()) {
+    $("player-next").disabled = true;
+    $("player-loading").hidden = false;
+    $("player-loading").textContent = "Finding another game…";
+  } else {
+    $("random-status").textContent = "Choosing a little corner of the internet…";
   }
+  const revision = state.revision;
   try {
     const response = await state.adapter.randomSite(filters());
-    if (revision !== state.revision) {
-      if (popup && !popup.closed) popup.close();
-      $("random-status").textContent = "Your filters changed. Click again for a new detour.";
-      return;
-    }
+    if (request !== state.playerRequest || revision !== state.revision) return;
     const site = response?.site;
-    if (!site) {
-      if (popup && !popup.closed) popup.close();
-      $("random-status").textContent = "No discoveries match these filters yet. Try a different phrase.";
-      return;
-    }
-    if (!validSite(site)) throw new Error("Invalid site URL");
+    if (!validSite(site)) throw new Error("No valid game available");
     showSelection(site);
-    if (popup && !popup.closed) {
-      popup.location.replace(checkedURL(site.url, "site"));
-      $("random-status").textContent = "Your detour opened in a new tab. Enjoy the unexpected.";
-    } else {
-      $("random-status").textContent = "Your browser kept the new tab closed. Open your discovery below.";
-      $("selection-link").focus({ preventScroll: true });
-      $("selection").scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
-    }
+    openPlayer(site);
+    $("random-status").textContent = "";
   } catch {
-    if (popup && !popup.closed) popup.close();
-    $("random-status").textContent = "That detour couldn’t load. Give it another try.";
+    if (request !== state.playerRequest) return;
+    $("random-status").textContent = "No game could be loaded from this selection. Try different filters.";
+    if (playerVisible()) {
+      $("player-loading").textContent = "Could not select a new game. Try Next again, or open the current game directly.";
+      $("player-loading").hidden = false;
+    }
   } finally {
     state.randomBusy = false;
+    $("player-next").disabled = false;
     setBusy();
   }
 }
 
 function bindEvents() {
   $("random-button").addEventListener("click", takeDetour);
+  $("player-next").addEventListener("click", takeDetour);
+  $("player-close").addEventListener("click", closePlayer);
+  $("player-frame").addEventListener("load", () => { if (playerVisible()) $("player-loading").hidden = true; });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && playerVisible()) closePlayer();
+    if (event.key === "ArrowRight" && event.altKey && playerVisible()) { event.preventDefault(); void takeDetour(); }
+  });
   $("load-more").addEventListener("click", () => void loadPage());
   $("retry-button").addEventListener("click", () => state.adapter ? void loadPage({ reset: true }) : void initialize());
   $("filter-form").addEventListener("submit", (event) => {
