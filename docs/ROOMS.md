@@ -32,7 +32,7 @@ node --test tests/*.test.mjs
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-The 17 new Node tests cover deterministic ordering (including an independently checked SHA-256 vector), multiple device sessions, wrapping, manual defaults, clock alignment and catch-up, stopping rotation, persistence, blocked storage, history limits, asynchronous races, sharing and catalog edition mismatches. All 42 Node tests and 39 Python tests passed locally.
+The room tests cover deterministic ordering (including an independently checked SHA-256 vector), multiple device sessions, wrapping, manual defaults, clock alignment and catch-up, stopping rotation, persistence, blocked storage, history limits, asynchronous races, sharing and catalog edition mismatches. The full Node and Python suites passed locally.
 
 Browser execution was attempted but blocked with `ERR_BLOCKED_BY_ADMINISTRATOR` on the local test page. No browser/device visual sign-off or live deployment verification is claimed. Bootstrap CDN loading and actual third-party game compatibility remain browser QA items.
 
