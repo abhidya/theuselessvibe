@@ -20,3 +20,10 @@ dialog.game-player { position: fixed; inset: 0; width: 100%; max-width: none; he
   .hero { padding-block: 2.5rem !important; }
   .player-sheet { position: fixed; inset: auto 0 0; width: 100%; max-height: 70dvh; margin: 0; border-radius: 16px 16px 0 0; padding-bottom: max(20px, env(safe-area-inset-bottom)); }
 }
+
+/* A dialog's grid children must not expand to the iframe's intrinsic width on phones. */
+dialog.game-player { min-width: 0; max-width: 100vw; box-sizing: border-box; }
+.game-player .room-shell { min-width: 0; width: 100%; max-width: 100%; overflow: hidden; }
+.game-player .game-stage, .game-player .frame-host, .game-player .frame-host iframe { min-width: 0; max-width: 100%; }
+.game-player .room-nav { min-width: 0; width: 100%; max-width: 100%; }
+.game-player .room-nav button { overflow: hidden; text-overflow: ellipsis; }
