@@ -1,3 +1,4 @@
+import {parseMetadata, metadataFilters, hasMetadataFilters, matchesMetadata, facetCounts} from './metadata.js';
 /**
  * Static catalog adapter. All files are public GitHub Pages assets exported
  * from SQLite. A generation is immutable; the manifest switches last.
@@ -98,7 +99,7 @@ function parseManifest(value) {
     terms: [...terms],
     termCounts: { ...termCounts },
   };
-  for (const key of ['pendingAttributionChecks', 'unavailableAttributionChecks', 'carriedForwardSites', 'currentScanEligibleSites', 'pendingPartitions', 'pendingRepositoryChecks', 'discoveredRepositories']) {
+  for (const key of ['pendingMetadataChecks', 'metadataCheckedSites', 'metadataPartialSites', 'pendingAttributionChecks', 'unavailableAttributionChecks', 'carriedForwardSites', 'currentScanEligibleSites', 'pendingPartitions', 'pendingRepositoryChecks', 'discoveredRepositories']) {
     if (value[key] !== undefined) {
       assert(isCount(value[key]));
       stats[key] = value[key];
@@ -160,6 +161,7 @@ function parseSite(value) {
     signals,
     agentEvidence,
     attributionStatus,
+    metadata: parseMetadata(value.metadata, value.repo),
     attributionCheckedAt: value.attributionCheckedAt ?? null,
     attributionScope: value.attributionScope ?? null,
   };
@@ -299,6 +301,8 @@ export function createCatalog({
         return {
           index,
           id: entry.id,
+          metadata: parseMetadata(entry.metadata, entry.repo),
+          createdAt: entry.createdAt ?? null, updatedAt: entry.updatedAt ?? null, checkedAt: entry.checkedAt ?? null,
           agents,
           terms,
           pageTerms: normalizedStrings(entry.pageTerms ?? []),
@@ -311,7 +315,8 @@ export function createCatalog({
 
   async function matches(value, options) {
     const filter = filterOptions(options);
-    if (filter.agent === 'all' && filter.terms.length === 0 && filter.words.length === 0 && filter.source === 'any') return null;
+    const extra = metadataFilters(options);
+    if (!hasMetadataFilters(extra) && filter.agent === 'all' && filter.terms.length === 0 && filter.words.length === 0 && filter.source === 'any') return null;
     const entries = await searchIndex(value);
     return entries.filter((entry) => {
       const terms = filter.source === 'any' ? entry.terms : entry[`${filter.source}Terms`];
@@ -319,7 +324,7 @@ export function createCatalog({
         ? filter.terms.some((term) => terms.includes(term))
         : filter.source === 'any' || terms.length > 0;
       return (filter.agent === 'all' || entry.agents.includes(filter.agent)) &&
-        termMatch && filter.words.every((word) => entry.text.includes(word));
+        termMatch && filter.words.every((word) => entry.text.includes(word)) && matchesMetadata(entry, extra);
     });
   }
 
@@ -339,6 +344,9 @@ export function createCatalog({
   }
 
   return {
+    async loadFacets() {
+      return withGenerationRetry(async (value) => ({generation: value.generation, facets: facetCounts(await searchIndex(value))}));
+    },
     async loadStats() {
       return structuredClone((await manifest()).stats);
     },
@@ -375,3 +383,5 @@ const catalog = createCatalog();
 export const loadStats = (...args) => catalog.loadStats(...args);
 export const loadSites = (...args) => catalog.loadSites(...args);
 export const randomSite = (...args) => catalog.randomSite(...args);
+
+export const loadFacets = (...args) => catalog.loadFacets(...args);
