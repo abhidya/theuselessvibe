@@ -14,8 +14,10 @@ import shutil
 from collections import Counter
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from game_metadata import FIELDS
 
 SHARD_SIZE = 256
+MAX_SHARD_BYTES = 3_500_000  # Browser adapter accepts at most 4 MiB per detail shard.
 GENERATION_PATTERN = re.compile(r"^[a-f0-9]{20}$")
 
 
@@ -73,6 +75,10 @@ def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
             "name": site["name"],
             "description": (site.get("description") or "")[:160],
             "agents": agents,
+            "metadata": {"schemaVersion": 1, **{f: site.get("metadata", {}).get(f, []) for f in FIELDS},
+                         "playerCount": site.get("metadata", {}).get("playerCount"),
+                         "sourceStatus": site.get("metadata", {}).get("sourceStatus", "pending")},
+            "createdAt": site.get("createdAt"), "updatedAt": site.get("updatedAt"), "checkedAt": site.get("checkedAt"),
             "terms": terms,
             "pageTerms": sorted(set(str(signal["term"]).lower() for signal in site.get("signals", []) if signal.get("term") and signal.get("source") == "page")),
             "readmeTerms": sorted(set(str(signal["term"]).lower() for signal in site.get("signals", []) if signal.get("term") and signal.get("source") == "readme")),
@@ -83,8 +89,20 @@ def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
     generation_dir = output_dir / generation
     generation_dir.mkdir(parents=True, exist_ok=True)
     shards = []
-    for number, start in enumerate(range(0, len(ordered), SHARD_SIZE)):
-        values = ordered[start:start + SHARD_SIZE]
+    pending, size = [], 3
+    batches = []
+    for site in ordered:
+        encoded_size = len(_encode(site)) + 1
+        if encoded_size + 3 > MAX_SHARD_BYTES:
+            raise ValueError("A catalog record exceeds the detail-shard byte budget")
+        if pending and (len(pending) == SHARD_SIZE or size + encoded_size > MAX_SHARD_BYTES):
+            batches.append(pending)
+            pending, size = [], 3
+        pending.append(site)
+        size += encoded_size
+    if pending:
+        batches.append(pending)
+    for number, values in enumerate(batches):
         key = f"{generation}/{number:04d}.json"
         _atomic_write(output_dir / key, _encode(values))
         shards.append({"key": key, "count": len(values)})
@@ -109,7 +127,7 @@ def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
         "terms": sorted(set(configured_terms) | set(term_counts)),
         "termCounts": dict(sorted(term_counts.items())),
     }
-    for key in ("searchQueries", "unresolvedPartitions", "excludedRepositories", "coverageNote", "pendingAttributionChecks", "unavailableAttributionChecks", "carriedForwardSites", "currentScanEligibleSites", "pendingPartitions", "pendingRepositoryChecks", "discoveredRepositories", "reportedMatchesByQuery", "scanStartedAt", "scanFinishedAt", "attributionScope"):
+    for key in ("searchQueries", "unresolvedPartitions", "excludedRepositories", "coverageNote", "pendingMetadataChecks", "metadataCheckedSites", "metadataPartialSites", "pendingAttributionChecks", "unavailableAttributionChecks", "carriedForwardSites", "currentScanEligibleSites", "pendingPartitions", "pendingRepositoryChecks", "discoveredRepositories", "reportedMatchesByQuery", "scanStartedAt", "scanFinishedAt", "attributionScope"):
         if key in metadata:
             manifest[key] = metadata[key]
     previous_generation = None

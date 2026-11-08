@@ -10,6 +10,7 @@ it does not prove that every reachable page is a game or that it remains online.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 from http.client import InvalidURL
 import html
@@ -29,6 +30,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin, urlsplit, urlunsplit, unquote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import uuid
+
+from game_metadata import VERSION as TAG_VERSION, classify, candidate_files, MAX_FILE_BYTES
 
 
 SCHEMA_VERSION = 1
@@ -160,7 +163,7 @@ def partition_query(query: str, start: int, end: int) -> str:
 
 def compact_repository(repo: dict) -> dict:
     fields = ("id", "name", "full_name", "description", "homepage", "stargazers_count",
-              "fork", "private", "license", "created_at", "updated_at", "pushed_at", "has_pages", "topics")
+              "fork", "private", "license", "created_at", "updated_at", "pushed_at", "has_pages", "topics", "language", "default_branch")
     result = {field: repo.get(field) for field in fields}
     result["owner"] = {"login": (repo.get("owner") or {}).get("login", "")}
     return result
@@ -531,6 +534,12 @@ class Store:
                 attribution_status TEXT NOT NULL DEFAULT 'pending'
             );
             CREATE INDEX IF NOT EXISTS repository_scan ON repositories(seen_scan, checked_scan, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS game_metadata(
+                repo_id TEXT PRIMARY KEY, inputs TEXT NOT NULL DEFAULT '{}',
+                input_key TEXT, source_key TEXT, snapshot TEXT,
+                payload TEXT, version TEXT, status TEXT NOT NULL DEFAULT 'pending',
+                checked_at TEXT, retry_after TEXT
+            );
             CREATE TABLE IF NOT EXISTS query_matches(
                 query_index INTEGER NOT NULL, repo_id TEXT NOT NULL, PRIMARY KEY(query_index, repo_id)
             );
@@ -629,6 +638,28 @@ class Store:
     def next_check(self):
         return self.db.execute("SELECT * FROM repositories WHERE seen_scan=? AND (checked_scan IS NULL OR checked_scan!=?) ORDER BY updated_at DESC,id LIMIT 1", (self.scan, self.scan)).fetchone()
 
+    def observe_metadata(self, identifier: str, repo: dict, readme: str, observed_at: str):
+        inputs = {"readme": readme.encode("utf-8")[:MAX_FILE_BYTES].decode("utf-8", errors="ignore"), "observedAt": observed_at}
+        input_key = hashlib.sha256(json_text({"readme": inputs["readme"], "topics": repo.get("topics"),
+                                              "language": repo.get("language"), "source": source_key(repo)}).encode()).hexdigest()
+        row = self.db.execute("SELECT * FROM game_metadata WHERE repo_id=?", (identifier,)).fetchone()
+        if row and row["input_key"] == input_key and row["version"] == TAG_VERSION:
+            return
+        tags = classify(repo, inputs["readme"], observed_at=observed_at)
+        snapshot = row["snapshot"] if row and row["source_key"] == source_key(repo) else None
+        self.db.execute("""INSERT INTO game_metadata(repo_id,inputs,input_key,source_key,snapshot,payload,version,status)
+            VALUES(?,?,?,?,?,?,?,'pending') ON CONFLICT(repo_id) DO UPDATE SET
+            inputs=excluded.inputs,input_key=excluded.input_key,source_key=excluded.source_key,
+            snapshot=excluded.snapshot,payload=excluded.payload,version=excluded.version,status='pending',retry_after=NULL""",
+            (identifier,json_text(inputs),input_key,source_key(repo),snapshot,json_text(tags),TAG_VERSION))
+
+    def next_metadata(self):
+        return self.db.execute("""SELECT r.*, m.inputs AS metadata_inputs, m.snapshot AS metadata_snapshot,
+            m.source_key AS metadata_source_key FROM repositories r LEFT JOIN game_metadata m ON m.repo_id=r.id
+            WHERE r.site IS NOT NULL AND (m.repo_id IS NULL OR m.version!=? OR m.status='pending'
+                OR (m.retry_after IS NOT NULL AND m.retry_after<=?))
+            ORDER BY r.updated_at DESC,r.id LIMIT 1""", (TAG_VERSION, utc_iso())).fetchone()
+
     def next_attribution(self):
         return self.db.execute("SELECT * FROM repositories WHERE seen_scan=? AND checked_scan=? AND site IS NOT NULL AND attribution_status='pending' ORDER BY updated_at DESC,id LIMIT 1", (self.scan, self.scan)).fetchone()
 
@@ -642,7 +673,14 @@ class Store:
         unavailable_attr = self.db.execute("SELECT COUNT(*) FROM repositories WHERE seen_scan=? AND site IS NOT NULL AND attribution_status='unavailable'", (current,)).fetchone()[0]
         pending_parts = self.db.execute("SELECT COUNT(*) FROM partitions WHERE status='pending'").fetchone()[0]
         unresolved = self.db.execute("SELECT COUNT(*) FROM partitions WHERE status='unresolved'").fetchone()[0]
-        return dict(discoveredRepositories=discovered, scannedRepositories=checked, eligibleSites=eligible,
+        tag_counts = self.db.execute("""SELECT
+            SUM(CASE WHEN m.repo_id IS NULL OR m.version!=? OR m.status='pending' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN m.version=? AND m.status='checked' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN m.version=? AND m.status='partial' THEN 1 ELSE 0 END)
+            FROM repositories r LEFT JOIN game_metadata m ON r.id=m.repo_id WHERE r.site IS NOT NULL""",
+            (TAG_VERSION,TAG_VERSION,TAG_VERSION)).fetchone()
+        return dict(pendingMetadataChecks=tag_counts[0] or 0, metadataCheckedSites=tag_counts[1] or 0,
+                    metadataPartialSites=tag_counts[2] or 0, discoveredRepositories=discovered, scannedRepositories=checked, eligibleSites=eligible,
                     currentScanEligibleSites=current_eligible, carriedForwardSites=eligible-current_eligible,
                     pendingRepositoryChecks=discovered-checked, pendingAttributionChecks=pending_attr,
                     unavailableAttributionChecks=unavailable_attr, pendingPartitions=pending_parts, unresolvedPartitions=unresolved)
@@ -656,6 +694,7 @@ class Store:
                 # Retire cached records that disappeared, became private, were
                 # deleted, or no longer match any configured search.
                 self.db.execute("DELETE FROM repositories WHERE seen_scan!=?", (self.scan,))
+                self.db.execute("DELETE FROM game_metadata WHERE repo_id NOT IN (SELECT id FROM repositories)")
         return complete
 
     def sites(self) -> list[dict]:
@@ -668,6 +707,11 @@ class Store:
             site = json.loads(row["site"])
             attribution = json.loads(row["attribution"]) if row["attribution"] else {"agents": [], "agentEvidence": []}
             site.update(attribution)
+            tags = self.db.execute("SELECT payload,version FROM game_metadata WHERE repo_id=?", (row["id"],)).fetchone()
+            if tags and tags["payload"] and tags["version"] == TAG_VERSION:
+                site["metadata"] = json.loads(tags["payload"])
+            else:
+                site["metadata"] = classify(json.loads(row["payload"]), source_status="pending")
             site.update(attributionStatus=row["attribution_status"], attributionCheckedAt=row["attribution_checked_at"], attributionScope=ATTRIBUTION_SCOPE)
             result.append(site)
         return result
@@ -802,7 +846,118 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
         store.db.execute("UPDATE repositories SET checked_scan=?,check_fingerprint=?,checked_at=?,outcome=?,site=? WHERE id=?",
                          (store.scan, fingerprint, checked_at, outcome, json_text(site) if site else None, row["id"]))
     if site:
+        with store.db:
+            store.observe_metadata(row["id"], repo, readme, checked_at)
         refresh_attribution_state(store, row["id"], config)
+    return True
+
+
+def source_key(repo: dict) -> str:
+    return hashlib.sha256(json_text({k:repo.get(k) for k in ("full_name","pushed_at","default_branch")}).encode()).hexdigest()
+
+
+def step_metadata(store: Store, client: HttpClient) -> bool:
+    row = store.next_metadata()
+    if row is None:
+        return False
+    repo = json.loads(row["payload"])
+    inputs = json.loads(row["metadata_inputs"] or '{}')
+    snapshot = json.loads(row["metadata_snapshot"] or '{}') if row["metadata_source_key"] == source_key(repo) else {}
+    prefix = "/repos/" + quote(repo["full_name"], safe="/")
+
+    def checkpoint():
+        with store.db:
+            store.db.execute("""INSERT INTO game_metadata(repo_id,inputs,source_key,snapshot,status)
+                VALUES(?,?,?,?,'pending') ON CONFLICT(repo_id) DO UPDATE SET
+                snapshot=excluded.snapshot,source_key=excluded.source_key,status='pending'""",
+                (row["id"],json_text(inputs),source_key(repo),json_text(snapshot)))
+    warnings = list(snapshot.get("warnings", []))
+    status = "checked"
+    try:
+        if not snapshot.get("revision"):
+            commits = client.github(prefix + "/commits", {"per_page":1})
+            if not isinstance(commits, list) or not commits:
+                raise CollectorError("No source revision available")
+            if not isinstance(commits[0], dict):
+                raise CollectorError("Invalid source commit")
+            revision = commits[0].get("sha", "")
+            tree = ((commits[0].get("commit") or {}).get("tree") or {}).get("sha", "")
+            if not re.fullmatch(r"[a-f0-9]{40}", revision) or not re.fullmatch(r"[a-f0-9]{40}", tree):
+                raise CollectorError("Invalid source revision")
+            snapshot.update(revision=revision,tree=tree,files={},done=[])
+            checkpoint()
+        if "candidates" not in snapshot:
+            tree = client.github(prefix + "/git/trees/" + snapshot["tree"], {"recursive":1})
+            if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
+                raise CollectorError("Invalid source tree")
+            snapshot["candidates"] = candidate_files(tree["tree"])
+            if tree.get("truncated") is not False:
+                warnings.append("source-tree-truncated")
+            snapshot["warnings"] = warnings
+            checkpoint()
+        for entry in snapshot["candidates"]:
+            path, sha = entry["path"], entry.get("sha", "")
+            if path in snapshot["done"]:
+                continue
+            if not re.fullmatch(r"[a-f0-9]{40}", sha):
+                warnings.append("invalid-blob-sha:" + path)
+                snapshot["done"].append(path)
+                continue
+            # At most 128 KiB of raw source cached for one repository.
+            used = sum(len(text.encode("utf-8")) for text in snapshot["files"].values())
+            if used + entry["size"] > 131072:
+                warnings.append("source-byte-budget:" + path)
+                snapshot["done"].append(path)
+                continue
+            try:
+                blob = client.github(prefix + "/git/blobs/" + sha)
+                if not isinstance(blob, dict):
+                    raise ValueError("Unexpected blob response")
+                if blob.get("encoding") != "base64" or not isinstance(blob.get("size"), int) or blob["size"] > MAX_FILE_BYTES:
+                    raise ValueError("Non-text or oversized blob")
+                content = base64.b64decode(''.join(blob.get("content", "").split()),validate=True)
+                if len(content) > MAX_FILE_BYTES or len(content) != blob["size"]:
+                    raise ValueError("Unexpected blob size")
+                # Verify the API response actually describes the immutable blob requested.
+                digest = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+                if digest != sha:
+                    raise ValueError("Blob integrity mismatch")
+                snapshot["files"][path] = content.decode("utf-8")
+            except (ValueError, UnicodeError) as error:
+                warnings.append("unreadable-source:" + path)
+            except HttpFailure as error:
+                if error.status not in (404,410):
+                    raise
+                warnings.append("missing-source:" + path)
+            snapshot["done"].append(path)
+            snapshot["warnings"] = warnings
+            checkpoint()
+    except BudgetExpired:
+        checkpoint()
+        raise
+    except (CollectorError, ValueError, KeyError, TypeError):
+        # A source inspection failure must not reject an already reachable game.
+        # Do not store credentials, response bodies, or exception messages.
+        warnings.append("source-inspection-unavailable")
+        status = "partial"
+    if warnings:
+        status = "partial"
+    files = snapshot.get("files", {})
+    readme_path = next((p for p in files if p.lower().split('/')[-1] in ('readme','readme.md','readme.rst','readme.txt')), None)
+    readme = files[readme_path] if readme_path else inputs.get("readme", "")
+    tags = classify(repo, readme, readme_path=readme_path or "$readme", files=files,
+                    revision=snapshot.get("revision"), readme_revision=snapshot.get("revision") if readme_path else None,
+                    observed_at=utc_iso(), source_status=status, warnings=warnings)
+    if tags["warnings"]:
+        status = "partial"
+        tags["sourceStatus"] = "partial"
+    with store.db:
+        store.db.execute("""INSERT INTO game_metadata(repo_id,inputs,source_key,snapshot,payload,version,status,checked_at,retry_after)
+            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repo_id) DO UPDATE SET inputs=excluded.inputs,
+            source_key=excluded.source_key,snapshot=excluded.snapshot,payload=excluded.payload,
+            version=excluded.version,status=excluded.status,checked_at=excluded.checked_at,retry_after=excluded.retry_after""",
+            (row["id"],json_text(inputs),source_key(repo),json_text(snapshot),json_text(tags),TAG_VERSION,status,utc_iso(),
+             utc_iso(time.time()+86400) if status == "partial" else None))
     return True
 
 
@@ -866,13 +1021,23 @@ def export(store: Store, config: dict, output: Path) -> dict:
 
 
 def step_collection(store: Store, client: HttpClient, config: dict) -> bool:
-    """Discover the complete union first, check sites next, attribute last.
+    """Validate backlog first; reserve small slices for tags and further discovery.
 
-    Each phase is already checkpointed. A partial export remains publishable;
-    optional attribution cannot prevent discovering another search partition.
+    Persisting the turn keeps repeated short runs from starving any phase.
+    Each successful site check also publishes cheap, declared metadata immediately.
     """
-    return (step_partition(store, client, config) or step_check(store, client, config)
-            or step_attribution(store, client))
+    turn = store.get("workTurn", 0)
+    with store.db:
+        store.put("workTurn", turn + 1)
+    lanes = (("check",) * 8 + ("metadata", "discover"))
+    actions = {"check": lambda: step_check(store, client, config),
+               "metadata": lambda: step_metadata(store, client),
+               "discover": lambda: step_partition(store, client, config)}
+    order = [lanes[turn % len(lanes)], "check", "metadata", "discover"]
+    for lane in dict.fromkeys(order):
+        if actions[lane]():
+            return True
+    return step_attribution(store, client)
 
 
 def main(argv: list[str] | None = None) -> int:

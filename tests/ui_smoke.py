@@ -19,8 +19,11 @@ SITES = [dict(id=str(n), repo=f'fixture/game-{n}', name=f'Test game {n}' + (' wi
               url=f'https://fixture.github.io/game-{n}/', repoUrl=f'https://github.com/fixture/game-{n}',
               stars=0, license='MIT', createdAt=DATE, updatedAt=DATE, checkedAt=DATE,
               agents=[], signals=[], agentEvidence=[], attributionStatus='checked') for n in range(1, 4)]
+SITES[0]['metadata'] = {'schemaVersion':1,'genres':['puzzle'],'modes':['solo'],'languages':['JavaScript']}
+SITES[1]['metadata'] = {'schemaVersion':1,'genres':['racing'],'modes':['online-multiplayer'],'languages':['TypeScript']}
 INDEX = [dict(index=i, id=s['id'], repo=s['repo'], name=s['name'], description=s['description'],
-              agents=[], terms=[], pageTerms=[], readmeTerms=[]) for i, s in enumerate(SITES)]
+              agents=[], terms=[], pageTerms=[], readmeTerms=[],metadata=s.get('metadata'),
+              createdAt=s['createdAt'],updatedAt=s['updatedAt'],checkedAt=s['checkedAt']) for i, s in enumerate(SITES)]
 MANIFEST = dict(schemaVersion=1, generation='ui-test', query='fixture', searchUrl='https://github.com/search?q=game',
                 generatedAt=DATE, matchedRepositories=3, scannedRepositories=3, eligibleSites=3, complete=True,
                 shardSize=256, indexKey='ui-test/index.json', shards=[dict(key='ui-test/0000.json', count=3)],
@@ -76,6 +79,19 @@ def exercise(browser, name, base, width, height):
         # A successful layout must use the actual framework, not unstyled HTML.
         expect(page.locator('#random-button')).to_have_css('background-color', 'rgb(220, 53, 69)')
         page.screenshot(path=str(OUT / f'{tag}-collection.png'), full_page=True)
+        page.locator('#metadata-filters summary').click()
+        expect(page.locator('#filter-genre option[value="racing"]')).to_have_count(1)
+        page.locator('#filter-genre').select_option('racing')
+        expect(page.locator('.site-card')).to_have_count(1)
+        page.locator('#random-button').click()
+        expect(page.locator('#player-name')).to_have_text(SITES[1]['name'])
+        page.locator('#player-close').click()
+        page.locator('#clear-filters').click()
+        expect(page.locator('.site-card')).to_have_count(3)
+        # Reset history after the filter-only check so the navigation assertions stay independent.
+        page.evaluate('localStorage.clear()')
+        page.goto(base)
+        expect(page.locator('.site-card')).to_have_count(3)
         page.locator('.card-site-link').nth(0).click()
         expect(page.locator('#game-player')).to_be_visible()
         geometry(page, ['player-previous', 'player-history', 'player-next'], '#player-frame')
@@ -120,7 +136,10 @@ def exercise(browser, name, base, width, height):
         page.locator('#room-menu').click(); expect(page.locator('#auto-rotate')).not_to_be_checked()
         assert not errors, errors
     except Exception:
-        page.screenshot(path=str(OUT / f'{tag}-failure.png'), full_page=True)
+        try:
+            page.screenshot(path=str(OUT / f'{tag}-failure.png'), full_page=True)
+        except Exception as screenshot_error:
+            print(f'Screenshot unavailable ({type(screenshot_error).__name__}); preserving original test failure.', flush=True)
         raise
     finally: context.close()
 

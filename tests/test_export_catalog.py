@@ -69,6 +69,16 @@ class ExportCatalogTests(unittest.TestCase):
         self.assertEqual(full_site['description'], sites[256]['description'])
         self.assertEqual(manifest, self.read('manifest.json'))
 
+    def test_evidence_heavy_records_fit_browser_detail_response_budget(self):
+        # Patch the budget small to exercise packing without allocating megabytes.
+        with patch.object(exporter, 'MAX_SHARD_BYTES', 6000):
+            manifest = exporter.export_catalog([site(i) for i in range(20)], metadata(), self.directory)
+        self.assertGreater(len(manifest['shards']), 1)
+        self.assertEqual(sum(shard['count'] for shard in manifest['shards']), 20)
+        for shard in manifest['shards']:
+            self.assertLessEqual((self.directory / shard['key']).stat().st_size, 6000)
+        self.assertEqual(len(self.read(manifest['indexKey'])), 20)
+
     def test_empty_export_is_valid_and_deterministic(self):
         first = exporter.export_catalog([], metadata(), self.directory)
         second = exporter.export_catalog([], metadata(), self.directory)

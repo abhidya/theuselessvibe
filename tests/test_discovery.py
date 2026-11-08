@@ -122,9 +122,10 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_discovery_is_not_blocked_by_optional_attribution(self):
         with patch('collect.step_partition', return_value=True) as discover, \
-             patch('collect.step_check') as check, patch('collect.step_attribution') as attribution:
+             patch('collect.step_check', return_value=False) as check, \
+             patch('collect.step_metadata', return_value=False), patch('collect.step_attribution') as attribution:
             self.assertTrue(step_collection(self.store, FakeClient(), CONFIG))
-            discover.assert_called_once(); check.assert_not_called(); attribution.assert_not_called()
+            discover.assert_called_once(); check.assert_called_once(); attribution.assert_not_called()
 
     def test_new_candidates_still_reject_forks_wrong_license_or_two_stars(self):
         for change in ({'fork': True}, {'license': {'spdx_id': 'GPL-3.0'}}, {'stargazers_count': 2}):

@@ -1,9 +1,10 @@
+import {FILTER_FIELDS, metadataFilters, hasMetadataFilters} from './metadata.js';
 import { createTrail } from './trail.js';
 
 const $ = id => document.getElementById(id);
 const PROJECT = 'https://github.com/abhidya/theuselessvibe';
 const state = {
-  adapter: null, stats: null, query: '', loading: false, busy: false,
+  adapter: null, stats: null, query: '', tags: metadataFilters(), facetsGeneration: null, loading: false, busy: false,
   request: 0, selectionRequest: 0, nextOffset: null, generation: null,
   total: 0, shown: 0, seen: new Set(), site: null,
 };
@@ -11,6 +12,8 @@ let storage = null;
 try { storage = window.localStorage; } catch { /* Storage is optional. */ }
 const trail = createTrail(storage);
 const count = new Intl.NumberFormat();
+const hasFilters = () => Boolean(state.query) || hasMetadataFilters(state.tags);
+const filters = () => ({query: state.query, ...state.tags});
 let searchTimer;
 
 function sourceURL(site) {
@@ -58,19 +61,71 @@ function siteCard(site) {
   const play = document.createElement('button'); play.type = 'button'; play.className = 'btn btn-outline-danger btn-sm';
   play.textContent = 'Play →'; play.addEventListener('click', () => navigateToGame(site));
   actions.append(play, external('Source ↗', sourceURL(site), 'link-secondary align-self-center'));
-  body.append(title, author, description, actions); card.append(body); column.append(card); return column;
+  const tags = document.createElement('div'); tags.className = 'd-flex flex-wrap gap-1 mb-2';
+  for (const value of [...(site.metadata?.genres || []), ...(site.metadata?.modes || [])].slice(0, 2)) {
+    const badge = document.createElement('span'); badge.className = 'badge text-bg-light border';
+    badge.textContent = value.replaceAll('-', ' '); badge.title = 'Declared metadata, not gameplay verification'; tags.append(badge);
+  }
+  body.append(title, author, tags, description, metadataDetails(site), actions); card.append(body); column.append(card); return column;
+}
+function metadataDetails(site) {
+  const details = document.createElement('details'); details.className = 'small mb-3';
+  const summary = document.createElement('summary'); summary.textContent = 'Game details & evidence'; details.append(summary);
+  const metadata = site.metadata;
+  const explanation = document.createElement('p'); explanation.className = 'text-body-secondary mt-2';
+  explanation.textContent = metadata?.evidence?.length ? 'Declared = author statement. Detected = source signature. Neither proves gameplay works.' : 'Metadata has not been established for this game yet.';
+  details.append(explanation);
+  for (const [label, field] of [['Genre','genres'],['Mode','modes'],['Programming language','languages'],['Page language','contentLanguages'],['Engine','engines'],['Controls','controls']]) {
+    const line = document.createElement('p'); line.className = 'mb-1';
+    line.textContent = `${label}: ${metadata?.[field]?.join(', ') || 'Unknown'}`; details.append(line);
+  }
+  if (metadata?.playerCount) {
+    const players = document.createElement('p'); players.textContent = `Players (declared): ${metadata.playerCount.min}–${metadata.playerCount.max}`; details.append(players);
+  }
+  for (const e of metadata?.evidence || []) {
+    const p = document.createElement('p'); p.className = 'mb-2';
+    // catalog.js validates evidence origins; textContent prevents README markup injection.
+    const source = external(`${e.strength}: ${e.rule} ↗`, e.url, 'link-secondary');
+    p.append(source, document.createTextNode(` — ${e.excerpt}`)); details.append(p);
+  }
+  const dates = document.createElement('p'); dates.className = 'text-body-secondary mt-2';
+  const format = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString().slice(0,10) : 'Unknown';
+  dates.textContent = `Repo created: ${format(site.createdAt)} · Updated: ${format(site.updatedAt)} · Link checked: ${format(site.checkedAt)}. Mobile, embedding and gameplay compatibility: unverified.`;
+  details.append(dates); return details;
+}
+async function loadMetadataFilters() {
+  if (!state.adapter?.loadFacets) return;
+  $('metadata-filter-status').textContent = 'Loading available game details…';
+  try {
+    const result = await state.adapter.loadFacets();
+    for (const [filter, field] of Object.entries(FILTER_FIELDS)) {
+      const select = $(`filter-${filter}`);
+      if (!select) continue;
+      const saved = select.value;
+      select.replaceChildren(new Option('Any', ''));
+      const entries = Object.entries(result.facets[field] || {}).sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0);
+      for (const [value, count] of entries) select.append(new Option(`${value === 'unknown' ? 'Unknown' : value.replaceAll('-', ' ')} (${count})`, value.toLowerCase()));
+      // Preserve a chosen filter across a new catalog, even if it now has zero results.
+      if (saved && ![...select.options].some(o => o.value === saved)) select.append(new Option(`${saved} (0)`, saved));
+      select.value = saved;
+    }
+    state.facetsGeneration = result.generation;
+    $('metadata-filter-status').textContent = 'Filters apply to Browse and Play random. Counts describe this catalog snapshot.';
+  } catch { $('metadata-filter-status').textContent = 'Could not load tag options. Close and reopen Filters to retry.'; }
 }
 function playerVisible() { return $('game-player').open; }
 function updateControls() {
   $('random-button').disabled = !state.adapter || !state.total || state.loading || state.busy;
   $('random-button').setAttribute('aria-busy', String(state.busy));
   $('random-button-label').textContent = state.busy ? 'Choosing a game…' : state.loading ? 'Loading the collection…' :
-    state.total ? `${count.format(state.total)} ${state.query ? 'matching ' : ''}links to explore.` : 'No matching games in this snapshot.';
+    state.total ? `${count.format(state.total)} ${hasFilters() ? 'matching ' : ''}links to explore.` : 'No matching games in this snapshot.';
   $('resume-button').hidden = !trail.current;
   $('player-previous').disabled = !trail.canPrevious;
   $('player-next').disabled = state.busy || (!trail.canForward && (!state.adapter || !state.total || state.loading));
   $('player-history').disabled = !trail.entries.length;
-  $('clear-filters').hidden = !state.query;
+  $('clear-filters').hidden = !hasFilters();
+  const active = Object.values(state.tags).filter(v => v !== '').length;
+  $('active-filter-count').textContent = active ? `(${active})` : '';
   $('load-more').disabled = state.loading;
   $('site-grid').setAttribute('aria-busy', String(state.loading));
 }
@@ -100,7 +155,7 @@ async function loadPage(reset = false) {
   }
   $('load-status').textContent = ''; updateControls();
   try {
-    const result = await state.adapter.loadSites({ query: state.query, offset, limit: 12 });
+    const result = await state.adapter.loadSites({ ...filters(), offset, limit: 12 });
     if (request !== state.request) return;
     if (state.generation && result.generation !== state.generation) { await loadPage(true); return; }
     state.generation = result.generation; state.total = result.total; state.nextOffset = result.nextOffset;
@@ -109,7 +164,7 @@ async function loadPage(reset = false) {
       state.seen.add(site.id); state.shown++; $('site-grid').append(siteCard(site));
     }
     $('directory-state').hidden = state.shown > 0;
-    if (!state.shown) directoryMessage('No games found.', state.query ? 'Try a shorter search or clear it.' : 'The collector has not published any matching links yet.');
+    if (!state.shown) directoryMessage('No games found.', hasFilters() ? 'Try fewer filters or clear your search.' : 'The collector has not published any matching links yet.');
     $('directory-count').textContent = state.shown ? `Showing ${count.format(state.shown)} of ${count.format(state.total)}` : '';
     $('load-more').hidden = state.nextOffset === null;
   } catch {
@@ -191,7 +246,7 @@ async function takeDetour() {
   try {
     let result;
     for (let attempt = 0; attempt < 6; attempt++) {
-      result = await state.adapter.randomSite({query: state.query});
+      result = await state.adapter.randomSite(filters());
       if (request !== state.selectionRequest) return;
       if (!trail.recentIds.has(result.site.id) || state.total === 1) break;
     }
@@ -205,7 +260,9 @@ async function takeDetour() {
   } finally { if (request === state.selectionRequest) state.busy = false; updateControls(); }
 }
 function applySearch() {
+  if (!$('filter-form').reportValidity()) return;
   clearTimeout(searchTimer); state.query = $('catalog-query').value.trim();
+  state.tags = metadataFilters(Object.fromEntries([...document.querySelectorAll('[data-metadata-filter]')].map(el => [el.dataset.metadataFilter, el.type === 'number' && el.value !== '' ? Number(el.value) : el.value])));
   state.selectionRequest++; state.busy = false; void loadPage(true);
 }
 $('random-button').addEventListener('click', takeDetour);
@@ -226,7 +283,9 @@ $('game-player').addEventListener('cancel', event => { event.preventDefault(); c
 window.addEventListener('popstate', restoreNavigation);
 $('filter-form').addEventListener('submit', event => { event.preventDefault(); applySearch(); });
 $('catalog-query').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(applySearch, 220); });
-$('clear-filters').addEventListener('click', () => { $('catalog-query').value = ''; applySearch(); });
+$('clear-filters').addEventListener('click', () => { $('catalog-query').value = ''; document.querySelectorAll('[data-metadata-filter]').forEach(el => { el.value = ''; }); applySearch(); });
+$('metadata-filters').addEventListener('toggle', () => { if ($('metadata-filters').open) void loadMetadataFilters(); });
+document.querySelectorAll('[data-metadata-filter]').forEach(el => el.addEventListener('change', () => { if ($('filter-form').reportValidity()) applySearch(); }));
 $('load-more').addEventListener('click', () => void loadPage());
 $('retry-button').addEventListener('click', () => void initialize());
 async function initialize() {

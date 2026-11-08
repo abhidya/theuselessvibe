@@ -43,6 +43,21 @@
             <input id="catalog-query" name="query" class="form-control" type="search" placeholder="Search games…" maxlength="200" autocomplete="off">
             <button id="clear-filters" class="btn btn-outline-secondary" type="button" hidden>Clear</button>
           </div>
+          <details id="metadata-filters" class="mt-3">
+            <summary class="small">Filter by game details <span id="active-filter-count"></span></summary>
+            <p class="small text-body-secondary mt-2">Tags are author-declared or detected from source, not gameplay-tested. Missing details stay unknown. Room order is unaffected by personal filters.</p>
+            <p id="metadata-filter-status" class="small text-body-secondary" role="status"></p>
+            <div class="row g-3 mt-1">
+              <div class="col-12 col-sm-6"><label for="filter-genre" class="form-label small">Genre</label><select id="filter-genre" name="genre" data-metadata-filter="genre" class="form-select"><option value="">Any</option></select></div>
+<div class="col-12 col-sm-6"><label for="filter-mode" class="form-label small">Players / mode</label><select id="filter-mode" name="mode" data-metadata-filter="mode" class="form-select"><option value="">Any</option></select></div>
+<div class="col-12 col-sm-6"><label for="filter-language" class="form-label small">Programming language</label><select id="filter-language" name="language" data-metadata-filter="language" class="form-select"><option value="">Any</option></select></div>
+<div class="col-12 col-sm-6"><label for="filter-contentLanguage" class="form-label small">Page language</label><select id="filter-contentLanguage" name="contentLanguage" data-metadata-filter="contentLanguage" class="form-select"><option value="">Any</option></select></div>
+<div class="col-12 col-sm-6"><label for="filter-engine" class="form-label small">Engine</label><select id="filter-engine" name="engine" data-metadata-filter="engine" class="form-select"><option value="">Any</option></select></div>
+<div class="col-12 col-sm-6"><label for="filter-control" class="form-label small">Controls</label><select id="filter-control" name="control" data-metadata-filter="control" class="form-select"><option value="">Any</option></select></div>
+              <div class="col-12 col-sm-6"><label for="filter-players" class="form-label small">Supports this player count (declared)</label><input id="filter-players" data-metadata-filter="players" class="form-control" type="number" min="1" max="64" step="1" placeholder="Any"></div>
+              <div class="col-12 col-sm-6"><label for="filter-updatedAfter" class="form-label small">Repository updated on or after</label><input id="filter-updatedAfter" data-metadata-filter="updatedAfter" class="form-control" type="date"></div>
+            </div>
+          </details>
         </form>
         <p id="catalog-notice" class="small text-body-secondary" hidden></p>
         <div id="directory-state" class="rounded border p-4 text-center" role="status" aria-live="polite">

@@ -23,6 +23,19 @@
     "topic:godot-game",
     "\"playable at\" \"github.io\" in:readme",
     "\"play here\" \"github.io\" in:readme",
-    "\"play now\" \"github.io\" in:readme"
+    "\"play now\" \"github.io\" in:readme",
+    "topic:phaser",
+    "topic:kaplay",
+    "topic:unity-webgl",
+    "topic:gdevelop",
+    "topic:construct3",
+    "topic:puzzle-game",
+    "topic:platformer",
+    "topic:arcade-game",
+    "topic:tower-defense",
+    "topic:racing-game",
+    "topic:roguelike",
+    "\"Godot\" \"github.io\" in:readme",
+    "\"multiplayer\" \"github.io\" in:readme"
   ]
 }
