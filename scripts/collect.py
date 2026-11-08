@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from http.client import InvalidURL
 import html
 from html.parser import HTMLParser
 import json
@@ -90,7 +91,13 @@ def load_config(path: Path) -> dict:
             raise CollectorError("A search phrase exceeds 120 characters")
         if clean.casefold() not in {existing.casefold() for existing in normalized}:
             normalized.append(clean)
-    config = dict(config, baseQuery=base.strip(), phrases=normalized)
+    discovery = config.get("discoveryQueries", [])
+    if (not isinstance(discovery, list) or len(discovery) > 24
+            or not all(isinstance(q, str) and 0 < len(q.strip()) <= 200
+                       and not any(ord(c) < 32 for c in q) for q in discovery)):
+        raise CollectorError("discoveryQueries must contain at most 24 nonempty single-line queries")
+    config = dict(config, baseQuery=base.strip(), phrases=normalized,
+                  discoveryQueries=list(dict.fromkeys(q.strip() for q in discovery)))
     for setting in ("verificationMaxAgeDays", "attributionMaxAgeDays"):
         value = config.get(setting, 7)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 30:
@@ -109,12 +116,12 @@ def load_config(path: Path) -> dict:
 def exclusion_url(url: str) -> str:
     """A removal covers the same route with any fragment or query string."""
     try:
-        parsed = urlsplit(url.strip())
+        parsed = urlsplit(request_url(url.strip()))
         netloc = parsed.netloc.lower()
         if netloc.endswith(":443") and parsed.scheme.lower() == "https":
             netloc = netloc[:-4]
         return urlunsplit((parsed.scheme.lower(), netloc, parsed.path.rstrip("/") or "/", "", ""))
-    except ValueError:
+    except (ValueError, UnicodeError):
         return url.strip()
 
 
@@ -127,7 +134,12 @@ def is_excluded(repo: dict, url: str | None, config: dict) -> bool:
 
 
 def search_queries(config: dict) -> list[str]:
-    return [f'{config["baseQuery"]} "{term}"' for term in config["phrases"]]
+    # Keep legacy queries first so an appended discovery source can resume the
+    # existing checkpoint. Enforce the same eligibility on every new query.
+    legacy = [f'{config["baseQuery"]} "{term}"' for term in config["phrases"]]
+    extra = [f'{query} stars:<2 license:mit fork:false'
+             for query in config.get("discoveryQueries", [])]
+    return list(dict.fromkeys(legacy + extra))
 
 
 def search_url(query: str) -> str:
@@ -148,7 +160,7 @@ def partition_query(query: str, start: int, end: int) -> str:
 
 def compact_repository(repo: dict) -> dict:
     fields = ("id", "name", "full_name", "description", "homepage", "stargazers_count",
-              "fork", "private", "license", "created_at", "updated_at", "pushed_at", "has_pages")
+              "fork", "private", "license", "created_at", "updated_at", "pushed_at", "has_pages", "topics")
     result = {field: repo.get(field) for field in fields}
     result["owner"] = {"login": (repo.get("owner") or {}).get("login", "")}
     return result
@@ -163,6 +175,27 @@ def repository_eligible(repo: dict) -> bool:
         and (repo.get("license") or {}).get("spdx_id") == "MIT"
         and bool(repo.get("full_name")) and bool(repo.get("id"))
     )
+
+
+def request_url(value: str) -> str:
+    """Encode an IRI for urllib without decoding escaped path separators.
+
+    Host/path ownership is checked separately before every network request.
+    See urllib.parse.quote; raw Unicode cannot be sent in an HTTP request line.
+    """
+    if not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in value) or "\\" in value:
+        raise ValueError("Invalid URL characters")
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Expected an HTTPS URL without credentials")
+    if parsed.port not in (None, 443):
+        raise ValueError("Unexpected port")
+    # Current allowed origins are ASCII GitHub hosts. Do not reinterpret a
+    # Unicode/lookalike hostname or silently drop malformed authority data.
+    parsed.netloc.encode("ascii")
+    path = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
+    query = quote(parsed.query, safe="/%?:@!$&'()*+,;=-._~")
+    return urlunsplit(("https", parsed.hostname, path, query, ""))
 
 
 def owned_pages_url(raw: str, repo: dict) -> str | None:
@@ -201,12 +234,12 @@ def owned_pages_url(raw: str, repo: dict) -> str | None:
                 return None
         elif not segments or segments[0].casefold() != name.casefold():
             return None
-        return urlunsplit(("https", parsed.hostname, path, parsed.query, ""))
+        return request_url(urlunsplit(("https", parsed.hostname, path, parsed.query, "")))
     except (ValueError, UnicodeError):
         return None
 
 
-def candidate_urls(repo: dict, readme: str = "") -> list[str]:
+def candidate_urls(repo: dict, readme: str = "", *, include_default: bool = False) -> list[str]:
     explicit = [repo.get("homepage") or ""]
     for match in PAGE_URL_PATTERN.finditer(html.unescape(readme)):
         raw = match.group(0).rstrip(".,;:!\"'`")
@@ -214,6 +247,15 @@ def candidate_urls(repo: dict, readme: str = "") -> list[str]:
             while raw.endswith(closing) and raw.count(closing) > raw.count(opening):
                 raw = raw[:-1]
         explicit.append(raw)
+    # This is only a candidate, never proof that Pages is enabled. Search
+    # metadata may omit has_pages; an explicit false prevents the probe.
+    default = None
+    if include_default and repo.get("has_pages") is not False:
+        owner = str((repo.get("owner") or {}).get("login") or "")
+        name = str(repo.get("name") or "")
+        if owner and name:
+            path = "/" if name.casefold() == f"{owner}.github.io".casefold() else f"/{quote(name, safe='')}/"
+            default = owned_pages_url(f"https://{owner.lower()}.github.io{path}", repo)
     result = []
     for value in explicit:
         url = owned_pages_url(value, repo)
@@ -221,7 +263,36 @@ def candidate_urls(repo: dict, readme: str = "") -> list[str]:
             result.append(url)
     # Homepage first, then shallow pages ahead of screenshots/deep documentation.
     home = owned_pages_url(repo.get("homepage") or "", repo)
-    return sorted(result, key=lambda url: (url != home, urlsplit(url).path.count("/"), len(url)))[:12]
+    result = sorted(result, key=lambda url: (url != home, urlsplit(url).path.count("/"), len(url)))[:11]
+    if default and default not in result:
+        result.append(default)
+    return result
+
+
+# Evidence is recorded, not advertised as an automated playability test. These
+# cues supplement the exact phrase filters and allow short/alternative READMEs.
+GAME_TOPICS = {"browser-game", "html5-game", "javascript-game", "web-game", "godot-game", "js13k"}
+GAME_WORDS = re.compile(r"\b(?:games?|pacman|tetris|minesweeper|sokoban|solitaire|breakout|platformer|roguelike|shootemup)\b", re.I)
+PLAY_CUES = ("playable at", "play here", "play now", "browser game", "html5 game", "press space", "press enter", "tap to play")
+
+
+def game_evidence(repo: dict, readme: str, page: str = "") -> list[dict]:
+    evidence = []
+    for topic in repo.get("topics") or []:
+        if isinstance(topic, str) and topic.casefold() in GAME_TOPICS:
+            evidence.append({"source": "topic", "value": topic.casefold()})
+    # Names/descriptions alone are hints; they still require an owned, reachable
+    # HTML page. No canvas or 200 response alone is labelled a working game.
+    for source, value in (("metadata", str(repo.get("name") or "") + " " + str(repo.get("description") or "")),
+                          ("readme", readme), ("page", page)):
+        normalized = " ".join(value.casefold().split())
+        match = GAME_WORDS.search(normalized)
+        if match:
+            evidence.append({"source": source, "value": match.group(0)})
+        for cue in PLAY_CUES:
+            if cue in normalized:
+                evidence.append({"source": source, "value": cue})
+    return evidence
 
 
 class VisibleText(HTMLParser):
@@ -306,6 +377,10 @@ class HttpClient:
             try:
                 for _ in range(6):
                     self.budget.check(self.timeout + 1)
+                    try:
+                        target = request_url(target)
+                    except (ValueError, UnicodeError) as error:
+                        raise HttpFailure(400, "Malformed URL") from error
                     if not allowed(target):
                         raise HttpFailure(400, "URL or redirect is outside the permitted host/path")
                     request = Request(target, headers=headers)
@@ -313,6 +388,8 @@ class HttpClient:
                         response = self.opener.open(request, timeout=self.timeout)
                     except HTTPError as error:
                         response = error
+                    except (InvalidURL, UnicodeError, ValueError) as error:
+                        raise HttpFailure(400, "Malformed URL") from error
                     with response:
                         status = response.code
                         response_headers = {key.lower(): value for key, value in response.headers.items()}
@@ -483,6 +560,24 @@ class Store:
             if export_only:
                 if old_hash != config_hash:
                     raise CollectorError("Search configuration changed; collect the new configuration before exporting it")
+                return
+            old_config = self.get("config", {})
+            old_queries = search_queries(old_config) if old_config.get("baseQuery") else []
+            new_queries = search_queries(config)
+            unchanged = lambda value: {k: v for k, v in value.items() if k not in ("exclusions", "discoveryQueries")}
+            if (not refresh and self.get("finishedAt") is None and old_queries
+                    and unchanged(old_config) == unchanged(config)
+                    and new_queries[:len(old_queries)] == old_queries
+                    and len(new_queries) > len(old_queries)):
+                with self.db:
+                    for index in range(len(old_queries), len(new_queries)):
+                        self.db.execute("INSERT INTO partitions(query_index,start_second,end_second) VALUES(?,?,?)",
+                                        (index, 0, self.get("throughSecond")))
+                    self.put("configHash", config_hash)
+                    self.put("config", config)
+                    # Earlier rejected candidates can now qualify through new
+                    # evidence/default URL checks, without discarding good sites.
+                    self.db.execute("UPDATE repositories SET checked_scan=NULL WHERE seen_scan=? AND site IS NULL", (self.scan,))
                 return
             refresh = refresh or old_hash != config_hash or self.get("finishedAt") is not None
             if not refresh:
@@ -672,7 +767,7 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
     checked_at = utc_iso()
     if repository_eligible(repo):
         readme = client.readme(repo)
-        urls = candidate_urls(repo, readme)
+        urls = candidate_urls(repo, readme, include_default=bool(game_evidence(repo, readme)))
         if urls:
             outcome = "pages-unavailable"
         for url in urls:
@@ -687,7 +782,8 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
                 outcome = "excluded"
                 continue
             signals = detect_signals(config["phrases"], readme, page_text)
-            if not signals:
+            evidence = game_evidence(repo, readme, page_text)
+            if not signals and not evidence:
                 outcome = "no-current-playability-signals"
                 continue
             site = {
@@ -696,6 +792,7 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
                 "repoUrl": "https://github.com/" + repo["full_name"], "stars": repo["stargazers_count"],
                 "license": "MIT", "updatedAt": repo.get("updated_at") or repo.get("pushed_at") or repo.get("created_at"),
                 "createdAt": repo.get("created_at"), "checkedAt": checked_at, "signals": signals,
+                "gameEvidence": evidence,
             }
             outcome = "reachable"
             break
@@ -768,6 +865,16 @@ def export(store: Store, config: dict, output: Path) -> dict:
     return export_catalog(store.sites(), metadata, output)
 
 
+def step_collection(store: Store, client: HttpClient, config: dict) -> bool:
+    """Discover the complete union first, check sites next, attribute last.
+
+    Each phase is already checkpointed. A partial export remains publishable;
+    optional attribution cannot prevent discovering another search partition.
+    """
+    return (step_partition(store, client, config) or step_check(store, client, config)
+            or step_attribution(store, client))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, default=Path(".cache/catalog.sqlite"))
@@ -801,7 +908,7 @@ def main(argv: list[str] | None = None) -> int:
                 client.budget.check()
                 # Commit each unit of work before moving on. A killed Actions
                 # runner never turns an unfinished page into a completed one.
-                progressed = step_check(store, client, config) or step_attribution(store, client) or step_partition(store, client, config)
+                progressed = step_collection(store, client, config)
                 if not progressed:
                     break
                 if time.monotonic() - last_report >= 30:

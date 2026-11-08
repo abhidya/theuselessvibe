@@ -1,31 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+const html = read('../site/index.html');
+const js = read('../site/app.js');
 
-const html = readFileSync(new URL('../site/index.html', import.meta.url), 'utf8');
-const js = readFileSync(new URL('../site/app.js', import.meta.url), 'utf8');
-const css = readFileSync(new URL('../site/styles.css', import.meta.url), 'utf8');
-
-test('embedded game player has always-visible next, close, star, report and direct link controls', () => {
-  for (const id of ['game-player', 'player-frame', 'player-next', 'player-close', 'player-star', 'player-report', 'player-direct']) {
-    assert.match(html, new RegExp('id="' + id + '"'));
-  }
-  assert.match(html, /class="game-player-next"/);
-  assert.match(css, /\.game-player-next\s*\{[^}]*background:#f03b3b/);
-  assert.match(css, /\.game-player\s*\{[^}]*position:fixed/);
+test('solo and room use the same pinned framework and player geometry', () => {
+  const room = read('../site/room.html');
+  const bootstrap = /<link[^>]*href="https:\/\/cdn\.jsdelivr\.net\/npm\/bootstrap[^>]+>/;
+  assert.equal(html.match(bootstrap)[0], room.match(bootstrap)[0]);
+  assert.match(html, /href="rooms\/room\.css"/);
+  assert.ok(read('../site/styles.css').length < 4000, 'Do not restore the legacy stack of CSS overrides');
 });
-
-test('random discovery and directory clicks stay inside the site', () => {
-  assert.match(js, /\$\("player-next"\)\.addEventListener\("click", \(\) =>/);
-  assert.match(js, /visit\.addEventListener\("click"/);
-  assert.match(js, /navigateToGame\(site\)/);
-  assert.doesNotMatch(js, /window\.open\("about:blank"/);
+test('Previous History Next have a separate navigation row, not a crowded header', () => {
+  const nav = html.match(/<nav[^>]*aria-label="Game navigation"[^>]*>([\s\S]*?)<\/nav>/)[1];
+  for (const id of ['player-previous', 'player-history', 'player-next']) assert.ok(nav.includes(`id="${id}"`));
+  for (const id of ['player-star', 'player-report', 'player-direct']) assert.ok(!nav.includes(`id="${id}"`));
+  assert.equal((nav.match(/<button/g) || []).length, 3);
 });
-
-test('embed has limited permissions and a direct-open fallback for sites blocking iframes', () => {
-  assert.match(html, /sandbox="allow-scripts [^"]+"/);
-  assert.doesNotMatch(html, /allow-top-navigation/);
+test('secondary actions and history use native modal dialogs; help never covers iframe', () => {
+  assert.match(html, /<dialog id="player-more-dialog"/);
+  assert.match(html, /<dialog id="player-history-drawer"/);
+  assert.doesNotMatch(html, /game-player-help|Codex|Claude/);
   assert.match(html, /Some games block embedding/);
-  assert.match(js, /\$\("player-frame"\)\.removeAttribute\("src"\)/);
-  assert.match(js, /event\.key === "Escape"/);
+  assert.match(js, /showModal\(\)/);
+  assert.match(js, /replaceChildren\(frame\)/);
+  assert.doesNotMatch(js, /allow-top-navigation/);
+});
+test('all literal application element IDs exist exactly once', () => {
+  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]);
+  assert.equal(ids.length, new Set(ids).size);
+  for (const [, id] of js.matchAll(/\$\('([^']+)'\)/g)) assert.ok(ids.includes(id), id);
+});
+test('blocked localStorage cannot prevent startup or play', () => {
+  assert.match(js, /try \{ storage = window\.localStorage; \} catch/);
+  assert.match(js, /createTrail\(storage\)/);
+  assert.match(js, /addEventListener\('popstate', restoreNavigation\)/);
 });

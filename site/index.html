@@ -1,140 +1,116 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#17201e" />
-    <meta name="description" content="A lucky dip into the little-known web. Discover little-known GitHub Pages websites from repositories with fewer than two stars." />
-    <title>The Useless Vibe — Take the scenic route.</title>
-    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="styles.css" />
-    <script src="app.js" type="module"></script>
-  </head>
-  <body>
-    <a class="skip-link" href="#main">Skip to content</a>
-    <div class="dark-surface">
-      <header class="site-header shell">
-        <a class="brand" href="./" aria-label="The Useless Vibe home">
-          <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 3v34M3 20h34M8 8l24 24M8 32L32 8" /></svg>
-          <span>the useless vibe<span class="brand-period">.</span></span>
-        </a>
-        <nav aria-label="Main navigation">
-          <a href="#directory">The directory <span aria-hidden="true">↘</span></a>
-          <a href="room.html">Room</a>
-          <a class="project-source" href="https://github.com/abhidya/theuselessvibe" target="_blank" rel="noopener noreferrer" aria-label="The Useless Vibe source on GitHub, opens in a new tab">GitHub <span aria-hidden="true">↗</span></a>
-        </nav>
-      </header>
-    </div>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fafaf8">
+  <meta name="description" content="Discover overlooked browser games. Play one, go back, or try the next.">
+  <title>The Useless Vibe — Find your next game</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="rooms/room.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" type="module"></script>
+</head>
+<body>
+  <a class="visually-hidden-focusable p-3" href="#main">Skip to games</a>
+  <div class="container collection-shell">
+    <header class="d-flex align-items-center justify-content-between gap-2 py-3 border-bottom">
+      <a href="./" class="brand text-body text-decoration-none fw-bold">the useless vibe<span class="text-danger">.</span></a>
+      <a href="room.html" class="btn btn-outline-secondary">Room</a>
+    </header>
     <main id="main">
-      <section id="game-player" class="game-player" aria-label="Embedded game player" aria-hidden="true" hidden>
-        <div class="game-player-bar">
-          <div class="game-player-brand">
-            <span class="game-player-mark" aria-hidden="true">✳</span>
-            <div class="game-player-title"><strong id="player-name">Your next discovery</strong><span id="player-repo">GitHub Pages game</span></div>
-          </div>
-          <div class="game-player-controls" aria-label="Player controls">
-            <a id="player-star" target="_blank" rel="noopener noreferrer" class="game-player-link" href="https://github.com/abhidya/theuselessvibe">☆ Star</a>
-            <a id="player-report" target="_blank" rel="noopener noreferrer" class="game-player-link" href="https://github.com/abhidya/theuselessvibe/issues">Report</a>
-            <a id="player-direct" target="_blank" rel="noopener noreferrer" class="game-player-link game-player-open" href="https://github.com/abhidya/theuselessvibe">Open directly ↗</a>
-            <button id="player-previous" class="game-player-prev" type="button" disabled aria-label="Previous game">← Previous</button>
-            <button id="player-history" class="game-player-history" type="button" aria-expanded="false" aria-controls="player-history-drawer">History <span id="player-history-count">0</span></button>
-            <button id="player-next" class="game-player-next" type="button">Next game <span aria-hidden="true">→</span></button>
-            <button id="player-close" class="game-player-close" type="button" aria-label="Close player and return to the directory">✕</button>
-          </div>
+      <section class="hero py-5" aria-labelledby="hero-title">
+        <p class="text-body-secondary small mb-2">SMALL GAMES. GOOD DETOURS.</p>
+        <h1 id="hero-title" class="display-5 fw-bold mb-3">Find your next<br>favorite distraction.</h1>
+        <p class="text-body-secondary mb-4">Overlooked games from the corners of GitHub.<br>Play one. Try another. Come back to the good ones.</p>
+        <div class="d-flex flex-wrap gap-2">
+          <button id="random-button" class="btn btn-danger btn-lg" type="button" disabled>Play random →</button>
+          <button id="resume-button" class="btn btn-outline-secondary" type="button" hidden>Resume last game</button>
         </div>
-        <aside id="player-history-drawer" class="player-history-drawer" aria-label="Previously visited games" hidden>
-          <div class="player-history-heading"><strong>Recently played</strong><button id="player-history-close" type="button" aria-label="Close history">✕</button></div>
-          <p id="player-history-empty" class="player-history-empty">Your played games will appear here.</p>
-          <div id="player-history-list" class="player-history-list"></div>
-        </aside>
-        <div class="game-player-stage">
-          <div id="player-loading" class="game-player-loading" role="status" aria-live="polite">Loading your next detour…</div>
-          <iframe id="player-frame" title="Playable game" referrerpolicy="no-referrer" loading="eager" sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-popups allow-downloads allow-modals" allow="autoplay; fullscreen; gamepad" allowfullscreen></iframe>
-          <div class="game-player-help">Some games block embedding. If this one stays blank, use <strong>Open directly ↗</strong>. <kbd>Esc</kbd> closes the player.</div>
+        <p id="random-button-label" class="small text-body-secondary mt-3 mb-2" role="status">Loading the collection…</p>
+        <a href="room.html" data-room-entry class="small link-secondary">Join a room with friends ↗</a>
+        <p id="random-status" class="small text-danger mt-2" role="status" aria-live="polite"></p>
+      </section>
+      <section id="directory" class="pb-5" aria-labelledby="directory-title">
+        <div class="d-flex justify-content-between align-items-end gap-2 mb-3">
+          <h2 id="directory-title" class="h4 mb-0">Browse games</h2>
+          <span class="small text-body-secondary"><strong id="eligible-count">—</strong> links</span>
+        </div>
+        <form id="filter-form" role="search" aria-label="Search the game collection" class="mb-3">
+          <label for="catalog-query" class="visually-hidden">Search game names and descriptions</label>
+          <div class="input-group">
+            <input id="catalog-query" name="query" class="form-control" type="search" placeholder="Search games…" maxlength="200" autocomplete="off">
+            <button id="clear-filters" class="btn btn-outline-secondary" type="button" hidden>Clear</button>
+          </div>
+        </form>
+        <p id="catalog-notice" class="small text-body-secondary" hidden></p>
+        <div id="directory-state" class="rounded border p-4 text-center" role="status" aria-live="polite">
+          <h3 id="directory-state-title" class="h5">Loading games…</h3>
+          <p id="directory-state-description" class="small text-body-secondary mb-2">Getting the collection ready.</p>
+          <button id="retry-button" class="btn btn-outline-secondary" type="button" hidden>Try again</button>
+        </div>
+        <div id="site-grid" class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3" aria-busy="true"></div>
+        <div class="text-center mt-4">
+          <p id="directory-count" class="small text-body-secondary" role="status"></p>
+          <button id="load-more" class="btn btn-outline-secondary" type="button" hidden>Load more games</button>
+          <p id="load-status" class="small text-danger mt-2" role="status"></p>
         </div>
       </section>
-      <div class="dark-surface">
-        <section class="hero shell" aria-labelledby="hero-title">
-          <div class="hero-copy">
-            <p class="eyebrow"><span class="tiny-star" aria-hidden="true">✳</span> A little internet magic</p>
-            <h1 id="hero-title">Find a game.<br /><span class="scenic">Lose some time.</span></h1>
-            <p class="hero-description">Small, strange, and surprisingly fun browser games made by people on GitHub.</p>
-            
-          </div>
-          <div class="hero-action">
-            <div class="action-heading"><span>Try something different</span><svg viewBox="0 0 22 22" aria-hidden="true"><path d="M3 3c10 0 16 5 16 16M10 13l9 6 2-10" /></svg></div>
-            <button id="random-button" class="random-button" type="button" disabled aria-describedby="random-note" aria-label="Surprise me — play a random matching website here">
-              <span class="button-topline"><span id="button-kicker">A random little detour</span><span class="button-number" aria-hidden="true">↗</span></span>
-              <span class="button-main">Play something <br />random<span class="button-dot">.</span></span>
-              <span class="button-bottomline"><span id="random-button-label">Loading the catalog</span><svg class="dice" viewBox="0 0 40 40" aria-hidden="true"><rect x="5" y="5" width="30" height="30" rx="7" /><circle cx="13" cy="13" r="1.8" /><circle cx="27" cy="13" r="1.8" /><circle cx="20" cy="20" r="1.8" /><circle cx="13" cy="27" r="1.8" /><circle cx="27" cy="27" r="1.8" /></svg></span>
-            </button>
-            <p id="random-note" class="random-note">One random game, right here. Keep pressing Next.</p>
-            <a href="room.html" class="secondary-button" data-room-entry style="min-height:44px">Join a room with friends →</a>
-            <p id="random-status" class="inline-status" role="status" aria-live="polite"></p>
-          </div>
-        </section>
-        <section id="selection" class="selection shell" aria-labelledby="selection-heading" hidden>
-          <div class="selection-label"><span class="tiny-star" aria-hidden="true">✳</span><h2 id="selection-heading">Your next detour</h2></div>
-          <div class="selection-body">
-            <div><p id="selection-repo" class="selection-repo"></p><h3 id="selection-name"></h3><p id="selection-description" class="selection-description"></p><div id="selection-evidence" class="selection-evidence"></div></div>
-            <div class="selection-links"><a id="selection-link" class="light-link" target="_blank" rel="noopener noreferrer">Open website <span aria-hidden="true">↗</span></a><a id="selection-source" class="subtle-link" target="_blank" rel="noopener noreferrer" title="Open the source repository to give it a star on GitHub"><span aria-hidden="true">☆</span> Star on GitHub</a><a id="selection-report" class="subtle-link" target="_blank" rel="noopener noreferrer">Report / request removal <span aria-hidden="true">↗</span></a></div>
-          </div>
-        </section>
-        <section class="catalog-band catalog-band-muted" aria-label="Catalog overview">
-          <div class="catalog-inner shell">
-            <div class="catalog-intro"><span id="connection-indicator" class="connection-indicator"></span><span id="connection-label">Finding the little things</span></div>
-            <dl class="stats">
-              <div><dt>Live sites found</dt><dd id="eligible-count">—</dd></div>
-              <div><dt>Repositories scanned</dt><dd id="scanned-count">—</dd></div>
-              <div><dt>Search matches</dt><dd id="matched-count">—</dd></div>
-            </dl>
-          </div>
-        </section>
+    </main>
+    <footer class="border-top py-4 small text-body-secondary">
+      <details>
+        <summary>About the collection</summary>
+        <p class="mt-3">Links to GitHub Pages projects with 0–1 stars and a declared MIT repository license. Game signals and reachable HTML are not a playability guarantee. Individual art and music may have different terms.</p>
+        <p id="updated-at"></p>
+        <a id="search-link" class="link-secondary" href="https://github.com/search?q=game&amp;type=repositories" target="_blank" rel="noopener noreferrer">Source search ↗</a>
+      </details>
+      <a class="d-inline-block link-secondary mt-3" href="https://github.com/abhidya/theuselessvibe" target="_blank" rel="noopener noreferrer">Project on GitHub ↗</a>
+    </footer>
+  </div>
+
+  <dialog id="game-player" class="game-player" aria-label="Embedded game player">
+    <div class="room-shell">
+      <header class="room-header border-bottom p-2 gap-2">
+        <button id="player-close" class="btn btn-light" type="button" aria-label="Close player and return to collection">←</button>
+        <div class="room-heading">
+          <h2 id="player-name" class="fs-6 mb-0 text-truncate"></h2>
+          <p id="player-repo" class="small text-body-secondary mb-0 text-truncate"></p>
+        </div>
+        <a class="btn btn-outline-secondary" href="room.html">Room</a>
+        <button id="player-more" class="btn btn-light" type="button" aria-label="More game actions">⋯</button>
+      </header>
+      <p id="player-loading" class="room-status small m-0 px-3 py-2" role="status" aria-live="polite" hidden></p>
+      <div id="solo-frame-host" class="game-stage frame-host">
+        <iframe id="player-frame" title="Playable game" referrerpolicy="no-referrer" sandbox="allow-scripts allow-forms allow-pointer-lock" allow="autoplay; fullscreen; gamepad" allowfullscreen></iframe>
+      </div>
+      <nav class="room-nav border-top p-2 gap-2" aria-label="Game navigation">
+        <button id="player-previous" class="btn btn-outline-secondary" type="button" disabled>← Previous</button>
+        <button id="player-history" class="btn btn-light" type="button" aria-expanded="false" aria-controls="player-history-drawer">History</button>
+        <button id="player-next" class="btn btn-danger" type="button">Next →</button>
+      </nav>
     </div>
-        <section id="directory" class="directory shell" aria-labelledby="directory-title">
-          <div class="section-heading">
-            <div><p class="eyebrow dark-eyebrow">The collection</p><h2 id="directory-title">Or pick your own<span class="muted-dot">.</span></h2></div>
-            <a id="search-link" class="text-link" href="https://github.com/search?q=%22play+in+browser%22+%22github.io%22+in%3Areadme+stars%3A%3C2+license%3Amit+fork%3Afalse&amp;type=repositories&amp;s=updated&amp;o=desc" target="_blank" rel="noopener noreferrer">See source search <span aria-hidden="true">↗</span></a>
-          </div>
-          <div class="directory-meta"><p>Little-known browser games, newest updates first.</p><span class="sort-label"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2v12m-2-3 2 3 2-3M8 3h7M8 7h5M8 11h3" /></svg>Newest updates first</span></div>
-          <form id="filter-form" class="filters" role="search" aria-label="Filter discovered websites">
-            <div class="filter-main">
-              <label class="catalog-search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m13 13 4 4" /></svg><span class="visually-hidden">Search names, descriptions, and detected phrases</span><input id="catalog-query" type="search" name="query" placeholder="Search games…" autocomplete="off" maxlength="200" /></label>
-            </div>
-<details class="advanced-discovery"><summary>More filters <span aria-hidden="true">⌄</span></summary><div class="advanced-panel"><p class="advanced-note">Optional discovery signals</p>            <div class="phrase-filter-row"><span class="filter-label">Find the phrase</span><div id="term-filters" class="term-filters" role="group" aria-label="Detected game phrases. Any selected phrase matches."></div><label class="source-filter" for="match-source">Match in<select id="match-source" name="source"><option value="any">Either</option><option value="page">Website</option><option value="readme">README</option></select></label></div>
-<div class="advanced-agent"><p>Development attribution</p>              <div class="agent-filters" role="group" aria-label="Public agent evidence">
-                <button class="filter-chip is-active" type="button" data-agent="all" aria-pressed="true">All sites</button>
-                <button class="filter-chip" type="button" data-agent="codex" aria-pressed="false">Codex <span id="codex-count" class="chip-count"></span></button>
-                <button class="filter-chip" type="button" data-agent="claude" aria-pressed="false">Claude <span id="claude-count" class="chip-count"></span></button>
-              </div>
-</div></div></details>
-            <div class="filter-bottom"><p>Any selected phrase can match. Text search covers names, descriptions, and detected phrases.</p><button id="clear-filters" class="clear-filters" type="button" hidden>Clear filters <span aria-hidden="true">×</span></button></div>
-          </form>
-          <div id="catalog-notice" class="catalog-notice" role="status" aria-live="polite" hidden></div>
-          <div id="directory-state" class="directory-state" role="status" aria-live="polite">
-            <span class="empty-illustration" aria-hidden="true">✳</span>
-            <h3 id="directory-state-title">Gathering the good stuff.</h3>
-            <p id="directory-state-description">The directory is loading. Your next detour is on its way.</p>
-            <button id="retry-button" class="secondary-button" type="button" hidden>Try again <span aria-hidden="true">↻</span></button>
-          </div>
-          <div id="site-grid" class="site-grid" aria-live="polite" aria-relevant="additions"></div>
-          <div class="directory-footer">
-            <p id="directory-count" class="directory-count"></p>
-            <button id="load-more" class="secondary-button" type="button" hidden>More little discoveries <span aria-hidden="true">↓</span></button>
-            <p id="load-status" class="load-status" role="status" aria-live="polite"></p>
-          </div>
-        </section>
-        <section id="about" class="about shell" aria-labelledby="about-title">
-          <div class="about-graphic" aria-hidden="true"><svg viewBox="0 0 150 150"><path d="M75 5v140M5 75h140M25.5 25.5l99 99M25.5 124.5l99-99" /></svg><span>Curiosity<br />over popularity.</span></div>
-          <div class="about-copy"><p class="eyebrow dark-eyebrow">A different kind of discovery</p><h2 id="about-title">Small games deserve a chance.</h2><p>This is a doorway to the overlooked web: small experiments, playful projects, and unexpected places built by people making things.</p><p>We look for game-related phrases in little-known MIT repositories, exclude forks, and check the GitHub Pages links we find. You can follow the phrase that catches your eye, or leave the next discovery to chance. A matching phrase is a clue, so the results can include more than games.</p><p>Some optional filters use public development evidence; none determines whether a project is fun.</p><details class="matching-details"><summary>What do the filters check?</summary><p>Website matches come from the fetched page’s HTML text; words rendered only in a canvas or by JavaScript may be missed. README matches come from the repository’s README. Selecting several phrases matches any of them. Agent activity checks cover a limited recent history, and an unmarked project may still have used an agent.</p></details><a class="text-link" href="#hero-title">Let’s get a little lost <span aria-hidden="true">↗</span></a></div>
-        </section>
-      </main>
-      <footer class="site-footer shell">
-        <a class="brand footer-brand" href="./" aria-label="The Useless Vibe home"><svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 3v34M3 20h34M8 8l24 24M8 32L32 8" /></svg><span>the useless vibe.</span></a>
-        <div class="footer-links"><span>Made for wandering.</span><a href="https://github.com/abhidya/theuselessvibe" target="_blank" rel="noopener noreferrer">Source on GitHub <span aria-hidden="true">↗</span></a></div>
-        <p class="footer-note">All projects belong to their creators. MIT applies to the repository’s declared license. Check individual assets and notices before reusing a project. Website availability can change after the last check.</p>
-        <p id="updated-at" class="footer-updated">Catalog freshness will appear when loaded.</p>
-      </footer>
-    <noscript><p class="noscript">This random discovery experience needs JavaScript. You can still <a href="https://github.com/search?q=%22play+in+browser%22+%22github.io%22+in%3Areadme+stars%3A%3C2+license%3Amit+fork%3Afalse&amp;type=repositories&amp;s=updated&amp;o=desc">explore the GitHub search</a>.</p></noscript>
-  </body>
+  </dialog>
+  <dialog id="player-history-drawer" class="player-sheet" aria-labelledby="history-title">
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+      <h2 id="history-title" class="h5 mb-0">Recently played</h2>
+      <button id="player-history-close" class="btn-close" type="button" aria-label="Close history"></button>
+    </div>
+    <p id="player-history-empty" class="small text-body-secondary" hidden>No games played yet.</p>
+    <div id="player-history-list" class="list-group"></div>
+  </dialog>
+  <dialog id="player-more-dialog" class="player-sheet" aria-labelledby="more-title">
+    <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+      <h2 id="more-title" class="h5 mb-0">Game actions</h2>
+      <button id="player-more-close" class="btn-close" type="button" aria-label="Close game actions"></button>
+    </div>
+    <div class="d-grid gap-2">
+      <a id="player-direct" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer">Open game directly ↗</a>
+      <a id="player-star" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer">☆ Star on GitHub</a>
+      <a id="player-report" class="btn btn-outline-secondary" target="_blank" rel="noopener noreferrer">Report / request removal</a>
+    </div>
+    <p class="small text-body-secondary mt-3 mb-0">Some games block embedding. Use Open game directly when a game is blank. Revisiting a game reloads it; progress inside other sites cannot be saved here.</p>
+  </dialog>
+  <noscript><p class="container p-3">Enable JavaScript to explore the collection.</p></noscript>
+</body>
 </html>

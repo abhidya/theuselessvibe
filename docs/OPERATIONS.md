@@ -6,9 +6,9 @@ Open **Actions → Collect and deploy → Run workflow**. Leave **refresh** unch
 
 ## Change what gets discovered
 
-Edit `config/search.json`. Each `phrases` entry is searched separately with `baseQuery`; results are deduplicated. Keep phrases explicit and specific enough to reduce matches from unrelated documentation. Adding a phrase changes the query set; the collector begins a new discovery cycle when configuration changes.
+Edit `config/search.json`. Each `phrases` entry is searched separately with `baseQuery`. `discoveryQueries` adds independent topic and alternate-wording searches with the same eligibility constraints; results are deduplicated. Keep phrases explicit and specific enough to reduce matches from unrelated documentation. Appending only `discoveryQueries` to an unfinished scan preserves its existing partitions and accepted sites. Other configuration changes start a new discovery cycle.
 
-Website phrase matching inspects fetched HTML, not canvas pixels or text produced later by JavaScript. The Website filter is useful for narrowing results, but is not an exhaustive classifier for games.
+Website phrase matching inspects fetched HTML, not canvas pixels or text produced later by JavaScript. The recorded evidence is useful during review, but is not an exhaustive classifier for games.
 
 ## Remove a reported result
 
@@ -31,3 +31,9 @@ Repository exclusions are case-insensitive. Use the exact collected URL for a UR
 ## Deployment scope
 
 Only `site/` is published. SQLite, tokens, collector source, Actions artifacts, and issue-management controls are not placed in the Pages bundle. The public source repository and its build artifacts remain readable under GitHub's normal permissions.
+
+## URL failures and scan priority
+
+Unicode paths and queries are percent-encoded before sending requests. Malformed or unavailable candidate pages are recorded as rejected checks, not fatal batch errors. Search discovery runs before website checks; optional agent attribution runs last. A new broad scan can therefore report more discovered repositories before the accepted-site count grows.
+
+Use **GitHub Actions**, not branch publishing, as the Pages source to avoid replacing freshly generated data with the old committed snapshot. UI checks only use test fixtures and never run the collector.

@@ -11,3 +11,4 @@ build/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+ui-artifacts/

@@ -11,5 +11,18 @@
   ],
   "sort": "updated",
   "verificationMaxAgeDays": 7,
-  "attributionMaxAgeDays": 7
+  "attributionMaxAgeDays": 7,
+  "discoveryQueries": [
+    "game \"github.io\" in:readme",
+    "topic:browser-game",
+    "topic:html5-game",
+    "topic:javascript-game",
+    "topic:web-game",
+    "topic:game-jam",
+    "topic:js13k",
+    "topic:godot-game",
+    "\"playable at\" \"github.io\" in:readme",
+    "\"play here\" \"github.io\" in:readme",
+    "\"play now\" \"github.io\" in:readme"
+  ]
 }
