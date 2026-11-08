@@ -47,9 +47,19 @@ def geometry(page, ids, frame_id):
         assert box['width'] >= 44 and box['height'] >= 43, (id, box)
         assert box['x'] >= 0 and box['x'] + box['width'] <= viewport['width'] + 1, (id, box, viewport)
         assert box['y'] >= 0 and box['y'] + box['height'] <= viewport['height'] + 1, (id, box, viewport)
-        assert loc.evaluate('(el) => {const r=el.getBoundingClientRect();const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return el===top||el.contains(top)}'), f'{id} obscured'
+        # Bootstrap intentionally disables pointer events on disabled buttons.
+        # Their geometry must still fit; active controls must also be hittable.
+        if loc.is_enabled():
+            assert loc.evaluate('(el) => {const r=el.getBoundingClientRect();const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return el===top||el.contains(top)}'), f'{id} obscured'
         boxes.append(box)
     for a, b in zip(boxes, boxes[1:]): assert a['x'] + a['width'] <= b['x'] + 1, (a, b)
+    # Long titles must not widen the implicit grid track or hide header actions.
+    shell = page.locator('.room-shell').bounding_box()
+    assert shell and shell['width'] <= viewport['width'], ('Player wider than viewport', shell)
+    for control in page.locator('.room-header button, .room-header a').all():
+        if not control.is_visible(): continue
+        box = control.bounding_box()
+        assert box['x'] >= 0 and box['x'] + box['width'] <= viewport['width'] + 1, ('Header control clipped', box)
     frame = page.locator(frame_id).bounding_box(); assert frame and frame['height'] > 80
     assert frame['y'] + frame['height'] <= min(b['y'] for b in boxes) + 1, 'Navigation overlays the game'
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Horizontal overflow'

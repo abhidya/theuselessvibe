@@ -2,7 +2,7 @@
 :root { color-scheme: light; }
 body { margin: 0; background: #fafaf8; color: #242924; }
 [hidden] { display: none !important; }
-.room-shell { height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.room-shell { height: 100vh; height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .room-header { grid-row: 1; display: flex; align-items: center; padding-top: max(.5rem, env(safe-area-inset-top)) !important; }
 .room-heading { flex: 1; min-width: 0; }
 .room-heading h1, .room-heading p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
