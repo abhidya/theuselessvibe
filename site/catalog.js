@@ -1,3 +1,4 @@
+import {isText} from './text.js';
 import {parseMetadata, metadataFilters, hasMetadataFilters, matchesMetadata, facetCounts} from './metadata.js';
 /**
  * Static catalog adapter. All files are public GitHub Pages assets exported
@@ -27,10 +28,6 @@ class MissingCatalogFileError extends CatalogError {
 
 function assert(condition) {
   if (!condition) throw new CatalogError('CATALOG_UNAVAILABLE', 'The catalog could not be loaded. Please try again shortly.');
-}
-
-function isText(value, maxLength, allowEmpty = false) {
-  return typeof value === 'string' && (allowEmpty || value.length > 0) && value.length <= maxLength;
 }
 
 function isCount(value) {
