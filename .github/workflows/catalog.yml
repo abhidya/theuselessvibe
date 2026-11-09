@@ -65,7 +65,9 @@ jobs:
           retention-days: 90
           include-hidden-files: true
       - name: Validate exported catalog
-        run: python3 scripts/check_export.py site/data
+        run: |
+          python3 scripts/check_export.py site/data
+          node scripts/check_browser_catalog.mjs site/data
       - name: Package website
         uses: actions/upload-pages-artifact@v4
         with:

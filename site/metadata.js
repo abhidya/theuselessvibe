@@ -1,7 +1,8 @@
+import {isText} from './text.js';
 /** Additive catalog metadata. Missing fields remain unknown; tags never imply runtime verification. */
 export const TAG_FIELDS = ['genres', 'modes', 'engines', 'libraries', 'languages', 'controls', 'contentLanguages'];
 export const FILTER_FIELDS = {genre: 'genres', mode: 'modes', engine: 'engines', language: 'languages', control: 'controls', contentLanguage: 'contentLanguages'};
-const text = (v, max = 200) => typeof v === 'string' && v.length <= max;
+const text = (v, max = 200) => isText(v, max, true);
 const ensure = condition => { if (!condition) throw new TypeError('Invalid catalog metadata'); };
 export function parseMetadata(value, repo = null) {
   if (value == null) value = {schemaVersion: 1};
