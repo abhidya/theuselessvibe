@@ -13,12 +13,19 @@ body { margin: 0; background: #fafaf8; color: #242924; }
 .room-nav { grid-row: 4; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding-bottom: max(.5rem, env(safe-area-inset-bottom)) !important; background: #fafaf8; }
 .room-nav button { width: 100%; min-width: 0; white-space: nowrap; }
 .room-header button, .room-header a, .room-nav button, dialog .btn, dialog .list-group-item { min-height: 44px; }
-.room-header button, .room-header a { flex-shrink: 0; }
+.room-header button, .room-header a { flex-shrink: 0; min-width: 44px; }
+.room-star-link { white-space: nowrap; }
 dialog { width: min(440px, calc(100% - 24px)); max-height: calc(100dvh - 32px); overflow: auto; border: 1px solid #dce1d8; border-radius: 16px; padding: 20px; background: #fff; color: #242924; }
 dialog::backdrop { background: rgb(18 24 18 / 45%); }
 dialog .btn-close { min-width: 44px; min-height: 44px; padding: 0; background-position: center; }
 #room-code { text-transform: uppercase; min-width: 0; }
 #history-list button { text-align: left; white-space: normal; overflow-wrap: anywhere; }
 #history-list small { display: block; }
+/* Keep the title and navigation on the first row; the visible GitHub action
+   gets its own row on phones rather than squeezing or covering the game. */
+@media (max-width: 600px) {
+  .room-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .room-star-link { grid-column: 1 / -1; grid-row: 2; justify-self: end; }
+}
 @media (max-width: 380px) { .room-nav button { font-size: .875rem; padding-inline: .25rem; } .room-header { gap: .25rem !important; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }

@@ -4,7 +4,7 @@ A static GitHub Pages directory for overlooked browser games. **Play random → 
 
 ## Interface
 
-The solo collection and room player use the same pinned **Bootstrap 5.3.8** stylesheet and player geometry. Games fill the space between a compact header and a three-button bottom navigation bar. Star, Report and Open directly live in the **More** dialog; help text does not cover the game. Search matches project names, descriptions and collected signals. Development-agent attribution is not presented as a game category.
+The solo collection and room player use the same pinned **Bootstrap 5.3.8** stylesheet and player geometry. Games fill the space between a compact header and a three-button bottom navigation bar. **Star on GitHub** stays visible in the header and opens the repository in a new tab, where visitors sign in if needed and click GitHub’s Star button. Report and Open directly live in the **More** dialog; help text does not cover the game. Search matches project names, descriptions and collected signals. Development-agent attribution is not presented as a game category.
 
 Solo history stays on the device (up to 100 visits) and survives refresh. Previous and Next revisit the trail; Next discovers a game when at its end. Browsing back reloads third-party games: their internal progress cannot be saved here. Some games prohibit iframe embedding or need controls your device does not support; More always offers a direct link.
 
@@ -64,7 +64,7 @@ Reports open a prefilled issue in this repository; they do not automatically del
 `UI browser checks` runs the actual Bootstrap styles and JavaScript in **Chromium and WebKit**, with 320px, 390px, landscape and desktop viewports. The test uses synthetic fixture games, never production catalog entries. It checks button visibility/hit targets, iframe boundaries, native dialogs, history/refresh/Back/Forward, search, disabled storage and independent shared-room navigation. It uploads screenshots and a JSON report. A passing fixture test does not guarantee that every external game embeds or works on physical iOS hardware.
 
 ```bash
-python3 -m pip install playwright==1.56.0
+python3 -m pip install playwright==1.65.0
 python3 -m playwright install --with-deps chromium webkit
 python3 tests/ui_smoke.py
 ```

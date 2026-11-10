@@ -78,6 +78,7 @@ function render(view, navigation) {
   $('welcome').hidden = Boolean(view.site);
   $('frame-host').hidden = !view.site;
   $('game-actions').hidden = !view.site;
+  $('star-repo').hidden = !view.site;
   $('auto-rotate').checked = view.auto;
   $('auto-rotate').disabled = !view.site || view.busy;
   for (const id of ['previous-game', 'next-game']) $(id).disabled = !view.site || view.busy;

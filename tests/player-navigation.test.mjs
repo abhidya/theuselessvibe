@@ -125,6 +125,7 @@ async function application({ blockedStorage = false, disk = new Map(), navigatio
       assert.equal($('player-name').textContent, `Game ${id}`);
       assert.equal($('solo-frame-host').children[0].src, SITES.find(site => site.id === id).url);
       assert.equal(location.searchParams.get('play'), id);
+      assert.equal($('player-star').href, SITES.find(site => site.id === id).repoUrl, 'Star follows the currently selected repository');
     },
     expectHome() {
       assert.equal($('game-player').open, false);

@@ -1,6 +1,6 @@
 """Rendered UI regression checks. Synthetic games are test fixtures, never published.
 
-Run with playwright==1.56.0 and its Chromium/WebKit browsers installed.
+Run with playwright==1.65.0 and its Chromium/WebKit browsers installed.
 The real Bootstrap CDN stylesheet must load; do not replace it with fake CSS.
 """
 import functools
@@ -68,6 +68,38 @@ def fixtures(context):
         else: route.fulfill(status=404, body='Missing test fixture')
     context.route('**/data/**', catalog)
     context.route('https://fixture.github.io/**', lambda route: route.fulfill(status=200, content_type='text/html', body='''<!doctype html><html><head><style>body{margin:0;font:18px system-ui;background:#edf2f5;display:grid;place-items:center;height:100vh;color:#263544}section{text-align:center;padding:12px}button{padding:12px}</style></head><body><section><h1>UI test game</h1><p>This is a synthetic fixture.</p><button>Play</button></section></body></html>'''))
+    # Keep popup checks synthetic: never sign in to GitHub or star a real repository.
+    context.route('https://github.com/fixture/**', lambda route: route.fulfill(status=200, content_type='text/html',
+        body='<!doctype html><title>Repository fixture</title><h1>Synthetic GitHub repository</h1>'))
+
+def github_star(page, link_id, frame_id, title_id, site):
+    link = page.locator('#' + link_id)
+    expect(link).to_be_visible()
+    expect(link).to_have_attribute('href', site['repoUrl'])
+    expect(link).to_have_attribute('target', '_blank')
+    expect(link).to_have_attribute('rel', 'noopener noreferrer')
+    expect(link).to_have_attribute('aria-label', 'Star this game on GitHub (opens in a new tab)')
+    before_url = page.url
+    frame = page.frame_locator(frame_id)
+    expect(frame.get_by_role('heading', name='UI test game')).to_be_visible()
+    # An in-game marker verifies the browsing context survived, not just its URL.
+    frame.locator('body').evaluate("body => { body.dataset.starProbe = 'preserved'; }")
+    original_frame = page.locator(frame_id).element_handle()
+    with page.expect_popup() as opened:
+        link.click()
+    popup = opened.value
+    try:
+        popup.wait_for_load_state()
+        expect(popup).to_have_url(site['repoUrl'])
+        expect(popup.get_by_role('heading', name='Synthetic GitHub repository')).to_be_visible()
+        assert popup.evaluate('window.opener === null'), 'GitHub tab must not control the game tab'
+    finally:
+        popup.close()
+    assert page.url == before_url, 'Star must not navigate the player'
+    expect(page.locator('#' + title_id)).to_have_text(site['name'])
+    expect(page.locator(frame_id)).to_have_attribute('src', site['url'])
+    assert original_frame.evaluate('frame => frame.isConnected'), 'Star must not replace the active game iframe'
+    expect(frame.locator('body')).to_have_attribute('data-star-probe', 'preserved')
 
 def geometry(page, ids, frame_id):
     viewport = page.viewport_size
@@ -90,8 +122,12 @@ def geometry(page, ids, frame_id):
     for control in page.locator('.room-header button, .room-header a').all():
         if not control.is_visible(): continue
         box = control.bounding_box()
+        assert box['width'] >= 44 and box['height'] >= 43, ('Header control too small', box)
         assert box['x'] >= 0 and box['x'] + box['width'] <= viewport['width'] + 1, ('Header control clipped', box)
+        assert control.evaluate('(el) => {const r=el.getBoundingClientRect();const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return el===top||el.contains(top)}'), 'Header control obscured'
     frame = page.locator(frame_id).bounding_box(); assert frame and frame['height'] > 80
+    header = page.locator('.room-header').bounding_box()
+    assert frame['y'] >= header['y'] + header['height'] - 1, 'Header actions overlay the game'
     assert frame['y'] + frame['height'] <= min(b['y'] for b in boxes) + 1, 'Navigation overlays the game'
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Horizontal overflow'
 
@@ -128,6 +164,7 @@ def exercise(browser, name, base, width, height):
         page.locator('.card-site-link').nth(0).click()
         expect(page.locator('#game-player')).to_be_visible()
         geometry(page, ['player-previous', 'player-history', 'player-next'], '#player-frame')
+        github_star(page, 'player-star', '#player-frame', 'player-name', SITES[0])
         page.screenshot(path=str(OUT / f'{tag}-player.png'))
         page.locator('#player-more').click()
         expect(page.locator('#player-direct')).to_be_visible()
@@ -137,10 +174,13 @@ def exercise(browser, name, base, width, height):
         expect(page.locator('#game-player')).to_be_visible()
         page.locator('#player-close').click()
         page.locator('.card-site-link').nth(1).click()
+        expect(page.locator('#player-star')).to_have_attribute('href', SITES[1]['repoUrl'])
         page.locator('#player-previous').click()
         expect(page.locator('#player-name')).to_have_text(SITES[0]['name'])
+        expect(page.locator('#player-star')).to_have_attribute('href', SITES[0]['repoUrl'])
         page.locator('#player-next').click()
         expect(page.locator('#player-name')).to_have_text(SITES[1]['name'])
+        expect(page.locator('#player-star')).to_have_attribute('href', SITES[1]['repoUrl'])
         page.reload(); expect(page.locator('#player-name')).to_have_text(SITES[1]['name'])
         page.locator('#player-history').click()
         expect(page.locator('#player-history-list button')).to_have_count(2)
@@ -161,13 +201,22 @@ def exercise(browser, name, base, width, height):
         page.goto(base + 'room.html?room=PIZZA')
         expect(page.locator('#frame-host iframe')).to_be_visible()
         first = page.locator('#game-title').inner_text()
+        first_site = next(site for site in SITES if site['name'] == first)
         geometry(page, ['previous-game', 'show-history', 'next-game'], '#frame-host iframe')
+        github_star(page, 'star-repo', '#frame-host iframe', 'game-title', first_site)
         page.screenshot(path=str(OUT / f'{tag}-room.png'))
         other = context.new_page(); other.goto(base + 'room.html?room=PIZZA')
         expect(other.locator('#game-title')).to_have_text(first)
         page.locator('#next-game').click(); expect(page.locator('#game-title')).not_to_have_text(first)
+        current_site = next(site for site in SITES if site['name'] == page.locator('#game-title').inner_text())
+        expect(page.locator('#star-repo')).to_have_attribute('href', current_site['repoUrl'])
         expect(other.locator('#game-title')).to_have_text(first)
+        page.locator('#previous-game').click(); expect(page.locator('#game-title')).to_have_text(first)
+        expect(page.locator('#star-repo')).to_have_attribute('href', first_site['repoUrl'])
         page.locator('#room-menu').click(); expect(page.locator('#auto-rotate')).not_to_be_checked()
+        page.locator('#leave-room').click()
+        expect(page.locator('#star-repo')).to_be_hidden()
+        expect(page.locator('#frame-host iframe')).to_have_count(0)
         assert not errors, errors
     except Exception:
         try:
