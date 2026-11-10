@@ -1,5 +1,5 @@
 import {FILTER_FIELDS, metadataFilters, hasMetadataFilters} from './metadata.js';
-import { createTrail } from './trail.js';
+import { createTrail, safeEntry } from './trail.js';
 
 const $ = id => document.getElementById(id);
 const PROJECT = 'https://github.com/abhidya/theuselessvibe';
@@ -55,6 +55,10 @@ function siteCard(site) {
   title.append(visit);
   const author = document.createElement('p'); author.className = 'card-repo small text-body-secondary';
   author.textContent = site.repo;
+  const stars = document.createElement('p'); stars.className = 'card-stars small text-body-secondary';
+  stars.textContent = site.stars === null ? 'GitHub stars: unknown' :
+    `${count.format(site.stars)} GitHub ${site.stars === 1 ? 'star' : 'stars'} (last collected)`;
+  if (site.starsCheckedAt) stars.title = `Star count collected ${new Date(site.starsCheckedAt).toISOString()}`;
   const description = document.createElement('p'); description.className = 'card-text small text-body-secondary';
   description.textContent = site.description || 'An overlooked project. Open it and explore.';
   const actions = document.createElement('div'); actions.className = 'mt-auto pt-2 d-flex flex-wrap gap-3 small';
@@ -66,7 +70,7 @@ function siteCard(site) {
     const badge = document.createElement('span'); badge.className = 'badge text-bg-light border';
     badge.textContent = value.replaceAll('-', ' '); badge.title = 'Declared metadata, not gameplay verification'; tags.append(badge);
   }
-  body.append(title, author, tags, description, metadataDetails(site), actions); card.append(body); column.append(card); return column;
+  body.append(title, author, stars, tags, description, metadataDetails(site), actions); card.append(body); column.append(card); return column;
 }
 function metadataDetails(site) {
   const details = document.createElement('details'); details.className = 'small mb-3';
@@ -91,7 +95,13 @@ function metadataDetails(site) {
   const dates = document.createElement('p'); dates.className = 'text-body-secondary mt-2';
   const format = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString().slice(0,10) : 'Unknown';
   dates.textContent = `Repo created: ${format(site.createdAt)} · Updated: ${format(site.updatedAt)} · Link checked: ${format(site.checkedAt)}. Mobile, embedding and gameplay compatibility: unverified.`;
-  details.append(dates); return details;
+  details.append(dates);
+  if (site.starsCheckedAt) {
+    const observation = document.createElement('p'); observation.className = 'text-body-secondary';
+    observation.textContent = `Star count collected: ${new Date(site.starsCheckedAt).toISOString()}. Counts are not live.`;
+    details.append(observation);
+  }
+  return details;
 }
 async function loadMetadataFilters() {
   if (!state.adapter?.loadFacets) return;
@@ -138,7 +148,7 @@ function renderStats(stats) {
   $('eligible-count').textContent = count.format(stats.eligibleSites);
   $('catalog-notice').hidden = stats.complete || !stats.eligibleSites;
   $('catalog-notice').textContent = 'Collection is still in progress. Counts show checked links, not every matching repository.';
-  $('updated-at').textContent = `Catalog updated ${new Date(stats.generatedAt).toLocaleDateString()}. Newest repository updates appear first.`;
+  $('updated-at').textContent = `Catalog updated ${new Date(stats.generatedAt).toLocaleDateString()}. Most-starred games appear first, using the latest collected counts.`;
   const search = new URL(stats.searchUrl);
   if (search.protocol === 'https:' && search.hostname === 'github.com' && search.pathname === '/search') $('search-link').href = search.href;
 }
@@ -213,14 +223,15 @@ function locationFor(site) {
   return url.pathname + url.search + url.hash;
 }
 function navigateToGame(site) {
-  if (!validSite(site) || !trail.visit(site)) return;
+  if (!validSite(site)) return;
+  const entry = trail.visit(site); if (!entry) return;
   state.selectionRequest++; state.busy = false;
-  history.pushState({uselessVibe: 1, id: site.id, cursor: trail.cursor}, '', locationFor(site)); openPlayer(site);
+  history.pushState({uselessVibe: 1, id: entry.id, cursor: trail.cursor, site: entry}, '', locationFor(entry)); openPlayer(entry);
 }
 function navigateHistory(index) {
   const site = trail.goto(index); if (!site) return;
   state.selectionRequest++; state.busy = false;
-  history.pushState({uselessVibe: 1, id: site.id, cursor: trail.cursor}, '', locationFor(site)); openPlayer(site);
+  history.pushState({uselessVibe: 1, id: site.id, cursor: trail.cursor, site: safeEntry(site)}, '', locationFor(site)); openPlayer(site);
 }
 function showHome() {
   state.selectionRequest++; state.busy = false; state.site = null;
@@ -230,11 +241,19 @@ function showHome() {
 function closePlayer() { history.pushState({uselessVibe: 1, id: null}, '', locationFor(null)); showHome(); }
 function restoreNavigation(event) {
   const stored = event?.state;
-  const id = stored?.uselessVibe === 1 ? stored.id : new URL(location.href).searchParams.get('play');
+  const ownState = stored?.uselessVibe === 1;
+  const id = ownState ? stored.id : new URL(location.href).searchParams.get('play');
   let site = null;
   if (typeof id === 'string') {
-    const entry = trail.entries[stored?.cursor];
-    site = entry?.id === id ? trail.goto(stored.cursor) : trail.byId(id);
+    const cursor = ownState && Number.isInteger(stored.cursor) ? stored.cursor : -1;
+    const entry = trail.entries[cursor];
+    site = entry?.id === id ? trail.goto(cursor) : trail.byId(id);
+    // Browser entries outlive branches and the bounded local trail. Keep their
+    // own validated snapshot so Back/Forward and refresh can still reopen them.
+    if (!site && ownState) {
+      const snapshot = safeEntry(stored.site);
+      if (snapshot?.id === id) site = trail.visit(snapshot);
+    }
   }
   state.selectionRequest++; state.busy = false;
   if (site && validSite(site)) openPlayer(site); else showHome();

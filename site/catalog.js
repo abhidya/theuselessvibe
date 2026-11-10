@@ -123,7 +123,9 @@ function parseSite(value) {
   const source = safeHttpsUrl(value.repoUrl);
   assert(source.hostname === 'github.com' && !source.search && !source.hash);
   assert(source.pathname.replace(/\/$/, '').toLowerCase() === `/${value.repo}`.toLowerCase());
-  assert(Number.isInteger(value.stars) && value.stars >= 0 && value.stars < 2 && value.license === 'MIT');
+  // Discovery admits small repositories; already-admitted games can gain stars.
+  assert((value.stars == null || isCount(value.stars)) && value.license === 'MIT');
+  assert(value.starsCheckedAt == null || isDate(value.starsCheckedAt));
   assert(isDate(value.updatedAt) && isDate(value.createdAt) && isDate(value.checkedAt));
   const agents = normalizedStrings(value.agents ?? [], 32);
   assert(Array.isArray(value.signals ?? []) && Array.isArray(value.agentEvidence ?? []));
@@ -149,7 +151,8 @@ function parseSite(value) {
     description: value.description,
     url: page.href,
     repoUrl: source.href,
-    stars: value.stars,
+    stars: value.stars ?? null,
+    starsCheckedAt: value.starsCheckedAt ?? null,
     license: 'MIT',
     updatedAt: value.updatedAt,
     createdAt: value.createdAt,
@@ -175,6 +178,14 @@ function locateShard(shards, index) {
     else return shard;
   }
   throw new CatalogError('CATALOG_UNAVAILABLE', 'The catalog could not be loaded. Please try again shortly.');
+}
+
+function popularityOrder(a, b) {
+  // A missing historical count is unknown, not an observed zero. Ties retain
+  // the export's deterministic order without changing detail-shard positions.
+  if (a.stars === null) return b.stars === null ? a.index - b.index : 1;
+  if (b.stars === null) return -1;
+  return b.stars - a.stars || a.index - b.index;
 }
 
 /** Rejection sampling prevents modulo bias for every matching-set size. */
@@ -285,19 +296,23 @@ export function createCatalog({
     }, MAX_CACHED_SHARDS);
   }
 
-  async function searchIndex(value) {
-    return cachedRead(indexCache, value.indexKey, async () => {
-      const entries = await readJson(value.indexKey, 67_108_864);
-      assert(Array.isArray(entries) && entries.length === value.total);
-      return entries.map((entry, index) => {
+  async function searchIndex(value, order = 'index') {
+    const cached = await cachedRead(indexCache, value.indexKey, async () => {
+      const values = await readJson(value.indexKey, 67_108_864);
+      assert(Array.isArray(values) && values.length === value.total);
+      const entries = values.map((entry, index) => {
         assert(entry && entry.index === index && isText(entry.id, 160));
         assert(isText(entry.repo, 141) && REPOSITORY.test(entry.repo));
         assert(isText(entry.name, 200) && isText(entry.description, 160, true));
+        assert(entry.stars == null || isCount(entry.stars));
+        assert(entry.starsCheckedAt == null || isDate(entry.starsCheckedAt));
         const agents = normalizedStrings(entry.agents ?? [], 32);
         const terms = normalizedStrings(entry.terms ?? []);
         return {
           index,
           id: entry.id,
+          stars: entry.stars ?? null,
+          starsCheckedAt: entry.starsCheckedAt ?? null,
           metadata: parseMetadata(entry.metadata, entry.repo),
           createdAt: entry.createdAt ?? null, updatedAt: entry.updatedAt ?? null, checkedAt: entry.checkedAt ?? null,
           agents,
@@ -307,14 +322,16 @@ export function createCatalog({
           text: [entry.repo, entry.name, entry.description, ...terms].join(' ').normalize('NFKC').toLowerCase(),
         };
       });
+      return { index: entries, stars: [...entries].sort(popularityOrder) };
     }, 1);
+    return cached[order];
   }
 
-  async function matches(value, options) {
+  async function matches(value, options, order = 'index') {
     const filter = filterOptions(options);
     const extra = metadataFilters(options);
     if (!hasMetadataFilters(extra) && filter.agent === 'all' && filter.terms.length === 0 && filter.words.length === 0 && filter.source === 'any') return null;
-    const entries = await searchIndex(value);
+    const entries = await searchIndex(value, order);
     return entries.filter((entry) => {
       const terms = filter.source === 'any' ? entry.terms : entry[`${filter.source}Terms`];
       const termMatch = filter.terms.length > 0
@@ -348,12 +365,18 @@ export function createCatalog({
       return structuredClone((await manifest()).stats);
     },
     async loadSites(options = {}) {
-      const { offset = 0, limit = 12 } = options;
+      const { offset = 0, limit = 12, order = 'stars' } = options;
       if (!isCount(offset) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
         throw new CatalogError('INVALID_PAGINATION', 'Use a non-negative offset and a limit from 1 to 50.');
       }
+      if (!['stars', 'index'].includes(order)) {
+        throw new CatalogError('INVALID_ORDER', 'Choose stars or index order.');
+      }
       return withGenerationRetry(async (value) => {
-        const matching = await matches(value, options);
+        let matching = await matches(value, options, order);
+        // Browse ranks the complete matching set before pagination. Rooms use
+        // index order explicitly to look up their deterministic entry positions.
+        if (matching === null && order === 'stars') matching = await searchIndex(value, order);
         const total = matching === null ? value.total : matching.length;
         const end = Math.min(offset + limit, total);
         const entries = matching === null ? null : matching.slice(offset, end);

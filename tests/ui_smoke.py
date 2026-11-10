@@ -17,11 +17,13 @@ DATE = '2026-11-07T00:00:00Z'
 SITES = [dict(id=str(n), repo=f'fixture/game-{n}', name=f'Test game {n}' + (' with a deliberately long name' if n == 1 else ''),
               description='Synthetic UI test fixture, not a published catalog entry.',
               url=f'https://fixture.github.io/game-{n}/', repoUrl=f'https://github.com/fixture/game-{n}',
-              stars=0, license='MIT', createdAt=DATE, updatedAt=DATE, checkedAt=DATE,
+              stars=[120, 2, None][n - 1], starsCheckedAt=DATE if n < 3 else None,
+              license='MIT', createdAt=DATE, updatedAt=DATE, checkedAt=DATE,
               agents=[], signals=[], agentEvidence=[], attributionStatus='checked') for n in range(1, 4)]
 SITES[0]['metadata'] = {'schemaVersion':1,'genres':['puzzle'],'modes':['solo'],'languages':['JavaScript']}
 SITES[1]['metadata'] = {'schemaVersion':1,'genres':['racing'],'modes':['online-multiplayer'],'languages':['TypeScript']}
 INDEX = [dict(index=i, id=s['id'], repo=s['repo'], name=s['name'], description=s['description'],
+              stars=s['stars'],starsCheckedAt=s['starsCheckedAt'],
               agents=[], terms=[], pageTerms=[], readmeTerms=[],metadata=s.get('metadata'),
               createdAt=s['createdAt'],updatedAt=s['updatedAt'],checkedAt=s['checkedAt']) for i, s in enumerate(SITES)]
 MANIFEST = dict(schemaVersion=1, generation='ui-test', query='fixture', searchUrl='https://github.com/search?q=game',
@@ -76,6 +78,10 @@ def exercise(browser, name, base, width, height):
     try:
         page.goto(base)
         expect(page.locator('.site-card')).to_have_count(3)
+        expect(page.locator('.card-stars')).to_have_text([
+            '120 GitHub stars (last collected)', '2 GitHub stars (last collected)', 'GitHub stars: unknown'])
+        expect(page.locator('.card-stars').first).to_have_attribute('title', 'Star count collected 2026-11-07T00:00:00.000Z')
+        expect(page.locator('.card-site-link')).to_have_text([site['name'] for site in SITES])
         # A successful layout must use the actual framework, not unstyled HTML.
         expect(page.locator('#random-button')).to_have_css('background-color', 'rgb(220, 53, 69)')
         page.screenshot(path=str(OUT / f'{tag}-collection.png'), full_page=True)

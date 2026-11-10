@@ -40,6 +40,12 @@ def _atomic_write(path: Path, contents: bytes) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def popularity_key(site: dict) -> tuple:
+    stars = site.get("stars")
+    count = stars if isinstance(stars, int) and not isinstance(stars, bool) and stars >= 0 else -1
+    return count, site.get("updatedAt") or "", str(site["id"])
+
+
 def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
     """Write index, shards, then manifest, returning the completed manifest.
 
@@ -52,8 +58,18 @@ def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Stable newest-first ordering is also used for index positions.
-    ordered = sorted(sites, key=lambda site: (site["updatedAt"], str(site["id"])), reverse=True)
+    # Rank globally before sharding/pagination. Unknown counts follow known
+    # zeroes; update time and ID make equal-count ordering deterministic.
+    ordered = []
+    for source in sites:
+        site = dict(source)
+        if popularity_key(site)[0] == -1:
+            site["stars"] = None
+        site.setdefault("starsCheckedAt", None)
+        if site["stars"] is None:
+            site["starsCheckedAt"] = None
+        ordered.append(site)
+    ordered.sort(key=popularity_key, reverse=True)
     ids = [str(site["id"]) for site in ordered]
     if len(ids) != len(set(ids)):
         raise ValueError("Catalog site IDs must be unique")
@@ -79,6 +95,7 @@ def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
                          "playerCount": site.get("metadata", {}).get("playerCount"),
                          "sourceStatus": site.get("metadata", {}).get("sourceStatus", "pending")},
             "createdAt": site.get("createdAt"), "updatedAt": site.get("updatedAt"), "checkedAt": site.get("checkedAt"),
+            "stars": site["stars"], "starsCheckedAt": site["starsCheckedAt"],
             "terms": terms,
             "pageTerms": sorted(set(str(signal["term"]).lower() for signal in site.get("signals", []) if signal.get("term") and signal.get("source") == "page")),
             "readmeTerms": sorted(set(str(signal["term"]).lower() for signal in site.get("signals", []) if signal.get("term") and signal.get("source") == "readme")),
@@ -112,6 +129,7 @@ def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
     configured_terms = [term.lower() for term in configured_terms if isinstance(term, str)]
     manifest = {
         "schemaVersion": 1,
+        "sort": "stars-desc",
         "generation": generation,
         "query": metadata.get("query", metadata.get("baseQuery", "")),
         "searchUrl": metadata["searchUrl"],
@@ -127,7 +145,7 @@ def export_catalog(sites: list[dict], metadata: dict, output_dir: Path) -> dict:
         "terms": sorted(set(configured_terms) | set(term_counts)),
         "termCounts": dict(sorted(term_counts.items())),
     }
-    for key in ("searchQueries", "unresolvedPartitions", "excludedRepositories", "coverageNote", "pendingMetadataChecks", "metadataCheckedSites", "metadataPartialSites", "pendingAttributionChecks", "unavailableAttributionChecks", "carriedForwardSites", "currentScanEligibleSites", "pendingPartitions", "pendingRepositoryChecks", "discoveredRepositories", "reportedMatchesByQuery", "scanStartedAt", "scanFinishedAt", "attributionScope"):
+    for key in ("searchQueries", "unresolvedPartitions", "excludedRepositories", "coverageNote", "pendingMetadataChecks", "metadataCheckedSites", "metadataPartialSites", "pendingAttributionChecks", "unavailableAttributionChecks", "pendingStarRefreshes", "pendingScanStarRefreshes", "unavailableStarRefreshes", "carriedForwardSites", "currentScanEligibleSites", "pendingPartitions", "pendingRepositoryChecks", "discoveredRepositories", "reportedMatchesByQuery", "scanStartedAt", "scanFinishedAt", "attributionScope"):
         if key in metadata:
             manifest[key] = metadata[key]
     previous_generation = None

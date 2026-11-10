@@ -201,7 +201,7 @@ test('catalog loads only its index up front and uses unfiltered lazy validated d
   assert.equal(fixture.calls.length, 0);
   const site = await catalog.siteFor(catalog.entries[4]);
   assert.equal(site.id, '4');
-  assert.deepEqual(fixture.calls, [{ offset: 4, limit: 1 }]);
+  assert.deepEqual(fixture.calls, [{ offset: 4, limit: 1, order: 'index' }]);
 });
 
 test('expired share editions and mid-session catalog changes fail explicitly rather than reshuffle', async () => {

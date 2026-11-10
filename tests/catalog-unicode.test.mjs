@@ -52,9 +52,11 @@ now = '2026-11-08T00:00:00Z'
 sites = []
 for i in range(count):
     repo = f'fixture/game-{i}'
+    stars = i % 47 if i % 19 else None
     sites.append(dict(id=str(i), repo=repo, name=f'Game {i}', description='🎮' * 160,
         repoUrl=f'https://github.com/{repo}', url=f'https://fixture.github.io/game-{i}/',
-        stars=0, license='MIT', createdAt=now, updatedAt=now, checkedAt=now,
+        stars=stars, starsCheckedAt=now if stars is not None else None,
+        license='MIT', createdAt=now, updatedAt=now, checkedAt=now,
         agents=[], signals=[dict(term='play online', source='page')], agentEvidence=[],
         metadata=dict(schemaVersion=1, genres=['puzzle'], evidence=[dict(field='genres', value='puzzle',
             rule='readme', strength='declared', path='README.md', excerpt='🎮' * 180,
@@ -63,7 +65,7 @@ export_catalog(sites, dict(query='fixture', searchUrl='https://github.com/search
     generatedAt=now, scannedRepositories=count, matchedRepositories=count, complete=True), Path(sys.argv[1]))
 `;
 
-test('2,500 Python-exported Unicode games load through the production browser adapter', async () => {
+test('2,500 Python-exported Unicode games with varied star counts load through the production browser adapter', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'vibe-contract-'));
   try {
     execFileSync('python3', ['-c', EXPORT, directory, '2500'], {cwd: ROOT});

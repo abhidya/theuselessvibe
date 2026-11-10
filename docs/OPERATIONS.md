@@ -34,6 +34,8 @@ Only `site/` is published. SQLite, tokens, collector source, Actions artifacts, 
 
 ## URL failures and scan priority
 
-Unicode paths and queries are percent-encoded before sending requests. Malformed or unavailable candidate pages are recorded as rejected checks, not fatal batch errors. Search discovery runs before website checks; optional agent attribution runs last. A new broad scan can therefore report more discovered repositories before the accepted-site count grows.
+Unicode paths and queries are percent-encoded before sending requests. Malformed or unavailable candidate pages are recorded as rejected checks, not fatal batch errors. The collector shares bounded turns across website checks, source metadata, discovery, current-star refreshes and optional agent attribution. A new broad scan can therefore report more discovered repositories before the accepted-site count grows.
 
 Use **GitHub Actions**, not branch publishing, as the Pages source to avoid replacing freshly generated data with the old committed snapshot. UI checks only use test fixtures and never run the collector.
+
+Repository-scoped README errors (such as HTTP 451 or an oversized response) are recorded as unavailable for the current scan without blocking other games or deployment. Later scans reconsider them after the unsuccessful-check cache expires (at most one day). Previously verified sites are carried forward with their original link-check timestamp; a failed README read does not prove the game is unavailable. Authentication, rate-limit and service failures still pause the batch. Source metadata retries refetch failed blobs while retaining successful immutable reads.
