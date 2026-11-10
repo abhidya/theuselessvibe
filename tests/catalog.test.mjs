@@ -1,13 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 import { createCatalog, CatalogError, uniformRandomIndex } from '../site/catalog.js';
+import {loadRoomCatalog} from '../site/rooms/catalog.js';
+import {checkBrowserCatalog} from '../scripts/check_browser_catalog.mjs';
 
 const DATE = '2026-11-06T00:00:00Z';
 function site(index, extra = {}) {
   return {
     id: String(index), repo: `alice/game-${index}`, name: `Game ${index}`,
     description: `A browser puzzle number ${index}`, url: `https://alice.github.io/game-${index}/`,
-    repoUrl: `https://github.com/alice/game-${index}`, stars: index % 2,
+    repoUrl: `https://github.com/alice/game-${index}`, stars: 0, starsCheckedAt: DATE,
     license: 'MIT', updatedAt: DATE, createdAt: DATE, checkedAt: DATE,
     agents: [], signals: [], agentEvidence: [],
     attributionStatus: 'checked', attributionCheckedAt: DATE, attributionScope: 'Latest commits and pull requests',
@@ -25,6 +30,7 @@ function fixture(sites = Array.from({ length: 260 }, (_, i) => site(i)), generat
   }
   files.set(`${generation}/index.json`, sites.map((value, index) => ({
     index, id: value.id, repo: value.repo, name: value.name, description: value.description.slice(0, 160),
+    stars: value.stars, starsCheckedAt: value.starsCheckedAt, metadata: value.metadata,
     agents: value.agents, terms: [...new Set(value.signals.map((signal) => signal.term.toLowerCase()))],
     pageTerms: value.signals.filter((signal) => signal.source === 'page').map((signal) => signal.term.toLowerCase()),
     readmeTerms: value.signals.filter((signal) => signal.source === 'readme').map((signal) => signal.term.toLowerCase()),
@@ -50,7 +56,7 @@ function fixture(sites = Array.from({ length: 260 }, (_, i) => site(i)), generat
 }
 const rejectCatalog = (promise) => assert.rejects(promise, (error) => error instanceof CatalogError && error.code === 'CATALOG_UNAVAILABLE');
 
-test('unfiltered pages skip the compact index and stats expose coverage without shard internals', async () => {
+test('Browse loads the full compact index and stats expose coverage without shard internals', async () => {
   const data = fixture();
   const api = createCatalog(data.options);
   const stats = await api.loadStats();
@@ -63,7 +69,95 @@ test('unfiltered pages skip the compact index and stats expose coverage without 
   assert.equal('shards' in stats, false);
   assert.deepEqual(page.sites.map((value) => value.id), Array.from({ length: 12 }, (_, i) => String(i)));
   assert.equal(page.nextOffset, 12);
-  assert.deepEqual(data.calls, ['manifest.json', 'v1/0000.json']);
+  assert.deepEqual(data.calls, ['manifest.json', 'v1/index.json', 'v1/0000.json']);
+});
+
+test('popularity is global before pagination and preserves each detail shard position', async () => {
+  const sites = Array.from({length: 260}, (_, i) => site(i));
+  sites[258].stars = 100;
+  sites[3].stars = 75;
+  sites[256].stars = 75;
+  sites[1].stars = 2;
+  const data = fixture(sites);
+  const api = createCatalog(data.options);
+  const first = await api.loadSites({limit: 2});
+  assert.deepEqual(first.sites.map(value => [value.id, value.stars]), [['258', 100], ['3', 75]]);
+  assert.equal(first.nextOffset, 2);
+  const second = await api.loadSites({offset: first.nextOffset, limit: 3});
+  assert.deepEqual(second.sites.map(value => value.id), ['256', '1', '0']);
+  assert.equal(second.total, 260);
+  assert.equal(second.nextOffset, 5);
+  const last = await api.loadSites({offset: 259});
+  assert.deepEqual(last.sites.map(value => value.id), ['259']);
+  assert.equal(last.nextOffset, null);
+  assert.equal(first.sites[0].starsCheckedAt, DATE);
+  assert.deepEqual(data.calls, ['manifest.json', 'v1/index.json', 'v1/0001.json', 'v1/0000.json']);
+});
+
+test('filters preserve descending popularity before paginating the matching set', async () => {
+  const common = {agents: ['codex'], signals: [{term: 'play online', source: 'page'}],
+    metadata: {schemaVersion: 1, genres: ['puzzle']}};
+  const data = fixture([
+    site(0, {...common, stars: 1}),
+    site(1, {...common, stars: 100, agents: ['claude']}),
+    site(2, {...common, stars: 8}),
+    site(3, {...common, stars: 50, metadata: {schemaVersion: 1, genres: ['racing']}}),
+    site(4, {...common, stars: 20}),
+    site(5, {...common, stars: 8}),
+  ]);
+  const api = createCatalog(data.options);
+  const options = {agent: 'codex', source: 'page', terms: ['play online'], query: 'browser', genre: 'puzzle', limit: 2};
+  const first = await api.loadSites(options);
+  const second = await api.loadSites({...options, offset: first.nextOffset});
+  assert.deepEqual(first.sites.map(value => value.id), ['4', '2']);
+  assert.deepEqual(second.sites.map(value => value.id), ['5', '0']);
+  assert.equal(first.total, 4);
+  assert.equal(second.nextOffset, null);
+  // Ranked Browse must not mutate the original index used for random selection.
+  const random = createCatalog({...data.options, fillRandomValues: values => {values[0] = 1;}});
+  await random.loadSites(options);
+  assert.equal((await random.randomSite(options)).site.id, '2');
+});
+
+test('legacy missing star counts stay unknown and sort after known zeroes', async () => {
+  const data = fixture([
+    site(0, {stars: undefined, starsCheckedAt: undefined}),
+    site(1, {stars: 0, starsCheckedAt: undefined}),
+    site(2, {stars: null, starsCheckedAt: null}),
+    site(3, {stars: 2}),
+  ]);
+  const page = await createCatalog(data.options).loadSites();
+  assert.deepEqual(page.sites.map(value => [value.id, value.stars]), [['3', 2], ['1', 0], ['0', null], ['2', null]]);
+  assert.equal(page.sites[1].starsCheckedAt, null);
+  // Existing snapshots had detail counts but no star fields in the index.
+  const legacy = fixture([site(0, {stars: 0}), site(1, {stars: 1})]);
+  for (const entry of legacy.files.get('v1/index.json')) {
+    delete entry.stars;
+    delete entry.starsCheckedAt;
+  }
+  assert.deepEqual((await createCatalog(legacy.options).loadSites()).sites.map(value => value.id), ['0', '1']);
+});
+
+test('malformed star counts and collection timestamps fail in both index and details', async () => {
+  for (const change of [
+    ...[-1, 1.5, '2', true, Number.MAX_SAFE_INTEGER + 1].map(stars => ({stars})),
+    {starsCheckedAt: 'not a date'}, {starsCheckedAt: '2026-11-06'}, {starsCheckedAt: 42},
+  ]) {
+    for (const key of ['v1/index.json', 'v1/0000.json']) {
+      const data = fixture([site(0)]);
+      Object.assign(data.files.get(key)[0], change);
+      await rejectCatalog(createCatalog(data.options).loadSites());
+    }
+  }
+});
+
+test('room detail lookups use stable index positions regardless of Browse popularity', async () => {
+  const data = fixture([site(0, {stars: 1}), site(1, {stars: 100}), site(2, {stars: 2})]);
+  const adapter = createCatalog(data.options);
+  assert.deepEqual((await adapter.loadSites()).sites.map(value => value.id), ['1', '2', '0']);
+  const room = await loadRoomCatalog({adapter, fetcher: data.options.fetcher, baseUrl: data.options.baseUrl});
+  for (const entry of room.entries) assert.equal((await room.siteFor(entry)).id, entry.id);
+  assert.deepEqual(room.entries.map(entry => entry.index), [0, 1, 2]);
 });
 
 test('pagination spans shard boundaries and handles partial, empty and out-of-range pages', async () => {
@@ -137,7 +231,7 @@ test('an empty catalog reports zero honestly and random rejects without fetching
   assert.deepEqual((await api.loadSites()).sites, []);
   assert.equal((await api.loadStats()).eligibleSites, 0);
   await assert.rejects(api.randomSite(), (error) => error.code === 'EMPTY_CATALOG');
-  assert.deepEqual(data.calls, ['manifest.json']);
+  assert.deepEqual(data.calls, ['manifest.json', 'v1/index.json']);
 });
 
 test('invalid pagination and filter choices fail explicitly', async () => {
@@ -147,6 +241,7 @@ test('invalid pagination and filter choices fail explicitly', async () => {
     await assert.rejects(api.loadSites(options), (error) => error.code === 'INVALID_PAGINATION');
   }
   await assert.rejects(api.loadSites({ source: 'unknown' }), (error) => error.code === 'INVALID_FILTER');
+  await assert.rejects(api.loadSites({ order: 'random' }), (error) => error.code === 'INVALID_ORDER');
 });
 
 test('missing or malformed manifests fail without fabricating results', async () => {
@@ -174,10 +269,12 @@ test('outgoing game URLs reject lookalikes, credentials, explicit ports, HTTP an
   }
 });
 
-test('index IDs are cross-checked against detail shards before returning a filtered result', async () => {
-  const data = fixture([site(0, { agents: ['codex'] })]);
-  data.files.get('v1/index.json')[0].id = 'different';
-  await rejectCatalog(createCatalog(data.options).loadSites({ agent: 'codex' }));
+test('index IDs are cross-checked against detail shards before returning Browse results', async () => {
+  for (const options of [{}, {agent: 'codex'}]) {
+    const data = fixture([site(0, {agents: ['codex']})]);
+    data.files.get('v1/index.json')[0].id = 'different';
+    await rejectCatalog(createCatalog(data.options).loadSites(options));
+  }
 });
 
 test('failed shard reads recover, and returned nested arrays cannot poison cached data', async () => {
@@ -205,6 +302,22 @@ test('manifest refresh after thirty seconds switches to a new generation', async
   now = 30_000;
   assert.equal((await api.loadSites()).sites[0].id, '9');
   assert.equal(data.calls.filter((key) => key === 'manifest.json').length, 2);
+});
+
+test('newly collected counts replace the cached ranking with the next generation', async () => {
+  const data = fixture([site(0, {stars: 1}), site(1, {stars: 20})]);
+  let now = 0;
+  const api = createCatalog({...data.options, now: () => now});
+  const first = await api.loadSites({limit: 1});
+  assert.equal(first.sites[0].id, '1');
+  const next = fixture([site(0, {stars: 30}), site(1, {stars: 20})], 'v2');
+  for (const [key, value] of next.files) data.files.set(key, value);
+  now = 30_000;
+  const refreshed = await api.loadSites({limit: 1});
+  assert.equal(refreshed.generation, 'v2');
+  assert.equal(refreshed.sites[0].id, '0');
+  assert.equal(refreshed.sites[0].stars, 30);
+  assert.equal(first.sites[0].stars, 20);
 });
 
 test('a deployment removing an old shard refreshes the manifest and restarts the entire page', async () => {
@@ -253,7 +366,7 @@ test('a missing file in the unchanged generation fails without a retry loop', as
   const data = fixture([site(0)]);
   data.files.delete('v1/0000.json');
   await rejectCatalog(createCatalog(data.options).loadSites());
-  assert.deepEqual(data.calls, ['manifest.json', 'v1/0000.json', 'manifest.json']);
+  assert.deepEqual(data.calls, ['manifest.json', 'v1/index.json', 'v1/0000.json', 'manifest.json']);
 });
 
 test('the shard LRU retains at most eight detail files', async () => {
@@ -263,4 +376,28 @@ test('the shard LRU retains at most eight detail files', async () => {
   await api.loadSites({ offset: 0, limit: 1 });
   assert.equal(data.calls.filter((key) => key === 'v1/0000.json').length, 2);
   assert.equal(data.calls.filter((key) => key === 'manifest.json').length, 1);
+});
+
+test('pre-publish check verifies globally ranked pages and index/detail star agreement', async () => {
+  const data = fixture(Array.from({length: 260}, (_, i) => site(i, {
+    stars: i % 17 === 0 ? null : i % 43,
+    starsCheckedAt: i % 17 === 0 ? null : DATE,
+  })));
+  const directory = await mkdtemp(path.join(tmpdir(), 'vibe-stars-'));
+  try {
+    for (const [key, value] of data.files) {
+      const filename = path.join(directory, key);
+      await mkdir(path.dirname(filename), {recursive: true});
+      await writeFile(filename, JSON.stringify(value));
+    }
+    assert.equal((await checkBrowserCatalog(directory)).sites, 260);
+    const index = data.files.get('v1/index.json');
+    index[258].stars += 1;
+    await writeFile(path.join(directory, 'v1/index.json'), JSON.stringify(index));
+    await assert.rejects(checkBrowserCatalog(directory), /Star-count mismatch for 258/);
+    index[258].stars -= 1;
+    index[258].starsCheckedAt = '2026-11-07T00:00:00Z';
+    await writeFile(path.join(directory, 'v1/index.json'), JSON.stringify(index));
+    await assert.rejects(checkBrowserCatalog(directory), /Star-check timestamp mismatch for 258/);
+  } finally { await rm(directory, {recursive: true, force: true}); }
 });

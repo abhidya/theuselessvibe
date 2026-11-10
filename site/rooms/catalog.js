@@ -27,7 +27,7 @@ export async function loadRoomCatalog({ adapter, fetcher = fetch, baseUrl = new 
     entries,
     async siteFor(entry) {
       // No personal discovery filters: everyone in a room uses the full same catalog.
-      const result = await adapter.loadSites({ offset: entry.index, limit: 1 });
+      const result = await adapter.loadSites({ offset: entry.index, limit: 1, order: 'index' });
       if (result.generation !== generation || result.sites[0]?.id !== entry.id) throw new Error(EDITION_CHANGED);
       return result.sites[0];
     },

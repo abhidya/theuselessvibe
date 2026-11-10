@@ -215,10 +215,12 @@ class MetadataPipelineTests(unittest.TestCase):
         with patch('collect.step_check',return_value=True) as check, \
              patch('collect.step_metadata',return_value=True) as metadata, \
              patch('collect.step_partition',return_value=True) as discover, \
-             patch('collect.step_attribution') as attribution:
-            for _ in range(10): self.assertTrue(step_collection(self.store,self.client,CONFIG))
+             patch('collect.step_repository_refresh',return_value=True) as stars, \
+             patch('collect.step_attribution',return_value=True) as attribution:
+            for _ in range(12): self.assertTrue(step_collection(self.store,self.client,CONFIG))
             self.assertEqual(check.call_count,8); self.assertEqual(metadata.call_count,1)
-            self.assertEqual(discover.call_count,1); attribution.assert_not_called()
+            self.assertEqual(discover.call_count,1); self.assertEqual(attribution.call_count,1)
+            self.assertEqual(stars.call_count,1)
 
     def test_source_blob_integrity_failure_is_partial_not_a_false_engine_tag(self):
         github=self.client.github
@@ -229,6 +231,43 @@ class MetadataPipelineTests(unittest.TestCase):
         self.client.github=corrupt;step_metadata(self.store,self.client)
         tags=self.store.sites()[0]['metadata'];self.assertEqual(tags['sourceStatus'],'partial')
         self.assertFalse(tags['engines'])
+
+    def test_failed_blob_retries_recover_without_refetching_successes(self):
+        for failure_kind in ("missing", "unreadable", "legacy-checkpoint"):
+            with self.subTest(failure_kind=failure_kind):
+                store = Store(":memory:"); self.addCleanup(store.db.close)
+                store.start(CONFIG, now=1000)
+                with store.db: store.add_repository(self.repo, 0)
+                client = SourceClient(); step_check(store, client, CONFIG)
+                github = client.github
+                package = client.files['package.json'].encode()
+                sha = hashlib.sha1(b'blob ' + str(len(package)).encode() + b'\0' + package).hexdigest()
+                def failed(path, params=None):
+                    if path.endswith('/git/blobs/' + sha):
+                        if failure_kind == "unreadable":
+                            return dict(encoding='base64', size=1, content='eA==')
+                        raise HttpFailure(404)
+                    return github(path, params)
+                client.github = failed
+                step_metadata(store, client)
+                self.assertEqual(store.sites()[0]['metadata']['sourceStatus'], 'partial')
+                self.assertFalse(step_metadata(store, client))
+                with store.db:
+                    if failure_kind == "legacy-checkpoint":
+                        row = store.db.execute('SELECT snapshot FROM game_metadata').fetchone()
+                        snapshot = json.loads(row[0]); snapshot['done'].append('package.json')
+                        store.db.execute('UPDATE game_metadata SET snapshot=?', (json.dumps(snapshot),))
+                    store.db.execute("UPDATE game_metadata SET retry_after='2000-01-01T00:00:00Z'")
+                client.github = github
+                before = len(client.api_calls)
+                self.assertTrue(step_metadata(store, client))
+                calls = client.api_calls[before:]
+                self.assertEqual([path for path, _ in calls], ['/repos/alice1/game/git/blobs/' + sha])
+                tags = store.sites()[0]['metadata']
+                self.assertEqual(tags['engines'], ['phaser'])
+                self.assertEqual(tags['sourceStatus'], 'checked')
+                self.assertEqual(tags['warnings'], [])
+                self.assertFalse(step_metadata(store, client))
 
     def test_truncated_tree_is_not_reported_as_complete_inspection(self):
         github=self.client.github

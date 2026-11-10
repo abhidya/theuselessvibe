@@ -40,6 +40,7 @@ PAGE_SIZE = 100
 MAX_README_BYTES = 1024 * 1024
 MAX_PAGE_BYTES = 256 * 1024
 MAX_JSON_BYTES = 8 * 1024 * 1024
+REPOSITORY_REFRESH_SECONDS = 86400
 ATTRIBUTION_SCOPE = "Latest 30 commits and pull requests among the latest 100 issue records"
 USER_AGENT = "TheUselessVibeCatalog/1.0 (+https://github.com/abhidya/theuselessvibe)"
 PAGE_URL_PATTERN = re.compile(r"https://[^\s<>\"'`]+", re.IGNORECASE)
@@ -47,6 +48,10 @@ PAGE_URL_PATTERN = re.compile(r"https://[^\s<>\"'`]+", re.IGNORECASE)
 
 class CollectorError(Exception):
     """An actionable collection failure, without credentials in its message."""
+
+
+class ResponseTooLarge(CollectorError):
+    """A single resource exceeds its configured acquisition budget."""
 
 
 class BudgetExpired(CollectorError):
@@ -169,12 +174,16 @@ def compact_repository(repo: dict) -> dict:
     return result
 
 
-def repository_eligible(repo: dict) -> bool:
+def valid_stars(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def repository_eligible(repo: dict, *, admitted: bool = False) -> bool:
     stars = repo.get("stargazers_count")
     return (
         repo.get("fork") is False
         and repo.get("private") is False
-        and isinstance(stars, int) and not isinstance(stars, bool) and 0 <= stars < 2
+        and valid_stars(stars) and (admitted or stars < 2)
         and (repo.get("license") or {}).get("spdx_id") == "MIT"
         and bool(repo.get("full_name")) and bool(repo.get("id"))
     )
@@ -431,7 +440,7 @@ class HttpClient:
                             received += len(chunk)
                         body = b"".join(chunks)
                         if len(body) > limit and resource:
-                            raise CollectorError("GitHub response exceeded the configured size limit")
+                            raise ResponseTooLarge("GitHub response exceeded the configured size limit")
                         return body[:limit], response_headers, target
                 else:
                     raise HttpFailure(400, "Too many redirects")
@@ -547,7 +556,16 @@ class Store:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(partitions)")}
         if "items_json" not in columns:
             self.db.execute("ALTER TABLE partitions ADD COLUMN items_json TEXT NOT NULL DEFAULT '[]'")
-            self.db.commit()
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(repositories)")}
+        for column in ("admitted_at", "stars_checked_at", "repository_checked_at",
+                       "repository_checked_scan", "repository_retry_after"):
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE repositories ADD COLUMN {column} TEXT")
+        if "admitted_at" not in columns:
+            # Existing verified sites are evidence of an earlier low-star admission.
+            # A historical page-check timestamp is not a star observation timestamp.
+            self.db.execute("UPDATE repositories SET admitted_at=COALESCE(checked_at, ?) WHERE site IS NOT NULL", (utc_iso(),))
+        self.db.commit()
 
     def get(self, key: str, default=None):
         row = self.db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
@@ -607,21 +625,35 @@ class Store:
                 self.db.execute("INSERT INTO partitions(query_index,start_second,end_second) VALUES(?,?,?)", (index, 0, now))
 
     def fingerprint(self, repo: dict) -> str:
-        return hashlib.sha256((self.get("configHash") + json_text(repo)).encode()).hexdigest()
+        # Popularity changes should not invalidate the separate HTML cache.
+        metadata = {key: value for key, value in repo.items() if key != "stargazers_count"}
+        return hashlib.sha256((self.get("configHash") + json_text(metadata)).encode()).hexdigest()
 
-    def add_repository(self, repo: dict, query_index: int):
+    def add_repository(self, repo: dict, query_index: int, *, observed_at: str | None = None):
         repo = compact_repository(repo)
         if not repo.get("id") or not repo.get("full_name"):
             raise CollectorError("GitHub returned a repository without an ID or name")
         identifier = str(repo["id"])
-        self.db.execute("""INSERT INTO repositories(id,full_name,payload,updated_at,seen_scan)
-            VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET full_name=excluded.full_name,
-            payload=excluded.payload, updated_at=excluded.updated_at, seen_scan=excluded.seen_scan,
-            checked_scan=CASE WHEN repositories.payload != excluded.payload THEN NULL ELSE repositories.checked_scan END""",
-            (identifier, repo["full_name"], json_text(repo), repo.get("updated_at") or repo.get("pushed_at") or repo.get("created_at") or "", self.scan))
+        buffered_observation = observed_at is not None
+        observed_at = observed_at or utc_iso()
+        previous = self.db.execute("SELECT * FROM repositories WHERE id=?", (identifier,)).fetchone()
         self.db.execute("INSERT OR IGNORE INTO query_matches VALUES(?,?)", (query_index, identifier))
-        if not repository_eligible(repo):
-            self.db.execute("UPDATE repositories SET site=NULL,outcome='no-longer-eligible',checked_scan=?,checked_at=? WHERE id=?", (self.scan, utc_iso(), identifier))
+        if previous and (max(previous["stars_checked_at"] or "", previous["repository_checked_at"] or "") > observed_at
+                         or (buffered_observation and previous["repository_checked_at"]
+                             and previous["repository_checked_at"] >= observed_at)):
+            # A multi-page search checkpoint can be older than a direct refresh.
+            # On same-second ties, prefer the independent repository check.
+            self.db.execute("UPDATE repositories SET seen_scan=? WHERE id=?", (self.scan, identifier))
+            return
+        self.db.execute("""INSERT INTO repositories(id,full_name,payload,updated_at,seen_scan,stars_checked_at)
+            VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET full_name=excluded.full_name,
+            payload=excluded.payload, updated_at=excluded.updated_at, seen_scan=excluded.seen_scan,
+            stars_checked_at=excluded.stars_checked_at,
+            checked_scan=CASE WHEN repositories.payload != excluded.payload THEN NULL ELSE repositories.checked_scan END""",
+            (identifier, repo["full_name"], json_text(repo), repo.get("updated_at") or repo.get("pushed_at") or repo.get("created_at") or "", self.scan,
+             observed_at if valid_stars(repo.get("stargazers_count")) else None))
+        if not repository_eligible(repo, admitted=bool(previous and previous["admitted_at"])):
+            self.db.execute("UPDATE repositories SET site=NULL,admitted_at=NULL,outcome='no-longer-eligible',checked_scan=?,checked_at=? WHERE id=?", (self.scan, utc_iso(), identifier))
 
     def next_partition(self):
         return self.db.execute("SELECT * FROM partitions WHERE status='pending' ORDER BY start_second DESC, query_index, id LIMIT 1").fetchone()
@@ -636,7 +668,26 @@ class Store:
                 self.db.execute("INSERT INTO partitions(query_index,start_second,end_second) VALUES(?,?,?)", (partition["query_index"], start, end))
 
     def next_check(self):
-        return self.db.execute("SELECT * FROM repositories WHERE seen_scan=? AND (checked_scan IS NULL OR checked_scan!=?) ORDER BY updated_at DESC,id LIMIT 1", (self.scan, self.scan)).fetchone()
+        return self.db.execute("""SELECT * FROM repositories WHERE
+            (seen_scan=? OR (admitted_at IS NOT NULL AND repository_checked_scan=?))
+            AND (checked_scan IS NULL OR checked_scan!=?)
+            ORDER BY updated_at DESC,id LIMIT 1""", (self.scan, self.scan, self.scan)).fetchone()
+
+    def due_repository_refreshes(self, *, count: bool = False, scan_only: bool = False):
+        # Oldest checked first; retries back off and neither a huge catalog nor
+        # a repeatedly failing entry can monopolize this lane.
+        selection = "COUNT(*)" if count else "*"
+        order = "" if count else " ORDER BY COALESCE(repository_checked_at, ''),id LIMIT 1"
+        freshness = "" if scan_only else " OR repository_checked_at IS NULL OR repository_checked_at<=?"
+        params = (utc_iso(), self.scan)
+        if not scan_only:
+            params += (utc_iso(time.time() - REPOSITORY_REFRESH_SECONDS),)
+        return self.db.execute(f"""SELECT {selection} FROM repositories WHERE admitted_at IS NOT NULL
+            AND (repository_retry_after IS NULL OR repository_retry_after<=?)
+            AND (repository_checked_scan IS NULL OR repository_checked_scan!=?{freshness}){order}""", params)
+
+    def next_repository_refresh(self):
+        return self.due_repository_refreshes().fetchone()
 
     def observe_metadata(self, identifier: str, repo: dict, readme: str, observed_at: str):
         inputs = {"readme": readme.encode("utf-8")[:MAX_FILE_BYTES].decode("utf-8", errors="ignore"), "observedAt": observed_at}
@@ -661,16 +712,22 @@ class Store:
             ORDER BY r.updated_at DESC,r.id LIMIT 1""", (TAG_VERSION, utc_iso())).fetchone()
 
     def next_attribution(self):
-        return self.db.execute("SELECT * FROM repositories WHERE seen_scan=? AND checked_scan=? AND site IS NOT NULL AND attribution_status='pending' ORDER BY updated_at DESC,id LIMIT 1", (self.scan, self.scan)).fetchone()
+        return self.db.execute("SELECT * FROM repositories WHERE site IS NOT NULL AND attribution_status='pending' ORDER BY updated_at DESC,id LIMIT 1").fetchone()
 
     def counts(self) -> dict:
         current = self.scan
         discovered = self.db.execute("SELECT COUNT(*) FROM repositories WHERE seen_scan=?", (current,)).fetchone()[0]
         checked = self.db.execute("SELECT COUNT(*) FROM repositories WHERE seen_scan=? AND checked_scan=?", (current, current)).fetchone()[0]
-        current_eligible = self.db.execute("SELECT COUNT(*) FROM repositories WHERE seen_scan=? AND checked_scan=? AND site IS NOT NULL", (current, current)).fetchone()[0]
+        current_eligible = self.db.execute("SELECT COUNT(*) FROM repositories WHERE checked_scan=? AND outcome='reachable' AND site IS NOT NULL", (current,)).fetchone()[0]
         eligible = self.db.execute("SELECT COUNT(*) FROM repositories WHERE site IS NOT NULL").fetchone()[0]
-        pending_attr = self.db.execute("SELECT COUNT(*) FROM repositories WHERE seen_scan=? AND site IS NOT NULL AND attribution_status='pending'", (current,)).fetchone()[0]
-        unavailable_attr = self.db.execute("SELECT COUNT(*) FROM repositories WHERE seen_scan=? AND site IS NOT NULL AND attribution_status='unavailable'", (current,)).fetchone()[0]
+        pending_checks = self.db.execute("""SELECT COUNT(*) FROM repositories WHERE
+            (seen_scan=? OR (admitted_at IS NOT NULL AND repository_checked_scan=?))
+            AND (checked_scan IS NULL OR checked_scan!=?)""", (current, current, current)).fetchone()[0]
+        pending_attr = self.db.execute("SELECT COUNT(*) FROM repositories WHERE site IS NOT NULL AND attribution_status='pending'").fetchone()[0]
+        unavailable_attr = self.db.execute("SELECT COUNT(*) FROM repositories WHERE site IS NOT NULL AND attribution_status='unavailable'").fetchone()[0]
+        pending_stars = self.due_repository_refreshes(count=True).fetchone()[0]
+        pending_scan_stars = self.due_repository_refreshes(count=True, scan_only=True).fetchone()[0]
+        unavailable_stars = self.db.execute("SELECT COUNT(*) FROM repositories WHERE admitted_at IS NOT NULL AND repository_retry_after IS NOT NULL").fetchone()[0]
         pending_parts = self.db.execute("SELECT COUNT(*) FROM partitions WHERE status='pending'").fetchone()[0]
         unresolved = self.db.execute("SELECT COUNT(*) FROM partitions WHERE status='unresolved'").fetchone()[0]
         tag_counts = self.db.execute("""SELECT
@@ -682,29 +739,38 @@ class Store:
         return dict(pendingMetadataChecks=tag_counts[0] or 0, metadataCheckedSites=tag_counts[1] or 0,
                     metadataPartialSites=tag_counts[2] or 0, discoveredRepositories=discovered, scannedRepositories=checked, eligibleSites=eligible,
                     currentScanEligibleSites=current_eligible, carriedForwardSites=eligible-current_eligible,
-                    pendingRepositoryChecks=discovered-checked, pendingAttributionChecks=pending_attr,
+                    pendingRepositoryChecks=pending_checks, pendingAttributionChecks=pending_attr,
+                    pendingStarRefreshes=pending_stars, unavailableStarRefreshes=unavailable_stars,
+                    pendingScanStarRefreshes=pending_scan_stars,
                     unavailableAttributionChecks=unavailable_attr, pendingPartitions=pending_parts, unresolvedPartitions=unresolved)
 
     def finish_if_complete(self):
         counts = self.counts()
-        complete = not any(counts[key] for key in ("pendingPartitions", "unresolvedPartitions", "pendingRepositoryChecks", "pendingAttributionChecks"))
+        # Periodic freshness must not keep a long discovery scan open forever.
+        # Only its first pass over retained repositories gates scan completion.
+        complete = not any(counts[key] for key in ("pendingPartitions", "unresolvedPartitions", "pendingRepositoryChecks", "pendingAttributionChecks", "pendingScanStarRefreshes"))
         if complete and self.get("finishedAt") is None:
             with self.db:
                 self.put("finishedAt", utc_iso())
-                # Retire cached records that disappeared, became private, were
-                # deleted, or no longer match any configured search.
-                self.db.execute("DELETE FROM repositories WHERE seen_scan!=?", (self.scan,))
+                # Admission survives search cutoff. Direct repository refreshes
+                # retire deleted/private/forked/non-MIT records instead.
+                self.db.execute("DELETE FROM repositories WHERE seen_scan!=? AND admitted_at IS NULL", (self.scan,))
                 self.db.execute("DELETE FROM game_metadata WHERE repo_id NOT IN (SELECT id FROM repositories)")
         return complete
 
     def sites(self) -> list[dict]:
         result = []
         # Keep the previous verified catalog usable while a refresh accumulates.
-        # New observations can remove entries immediately; unseen entries are
-        # retired only when the entire replacement scan has completed.
+        # New observations can remove entries immediately. Admitted entries
+        # remain refreshable even after graduating beyond discovery's star cap.
         rows = self.db.execute("SELECT * FROM repositories WHERE site IS NOT NULL ORDER BY updated_at DESC,id")
         for row in rows:
             site = json.loads(row["site"])
+            stars = json.loads(row["payload"]).get("stargazers_count")
+            if not valid_stars(stars):
+                stars = site.get("stars")
+            site.update(stars=stars if valid_stars(stars) else None,
+                        starsCheckedAt=row["stars_checked_at"])
             attribution = json.loads(row["attribution"]) if row["attribution"] else {"agents": [], "agentEvidence": []}
             site.update(attribution)
             tags = self.db.execute("SELECT payload,version FROM game_metadata WHERE repo_id=?", (row["id"],)).fetchone()
@@ -724,7 +790,7 @@ class Store:
             if is_excluded(repo, site.get("url") if site else None, config):
                 removals.append((self.scan, row["id"]))
         with self.db:
-            self.db.executemany("UPDATE repositories SET site=NULL,outcome='excluded',checked_scan=?,check_fingerprint=NULL WHERE id=?", removals)
+            self.db.executemany("UPDATE repositories SET site=NULL,admitted_at=NULL,outcome='excluded',checked_scan=?,check_fingerprint=NULL WHERE id=?", removals)
 
 
 def step_partition(store: Store, client: HttpClient, config: dict) -> bool:
@@ -763,7 +829,8 @@ def step_partition(store: Store, client: HttpClient, config: dict) -> bool:
         store.split_partition(partition, "Search page length did not match its reported total")
         return True
     seen.update(page_ids)
-    collected_items = json.loads(partition["items_json"]) + [compact_repository(repo) for repo in items]
+    observed_at = utc_iso()
+    collected_items = json.loads(partition["items_json"]) + [dict(compact_repository(repo), _observedAt=observed_at) for repo in items]
     final_page = partition["page"] >= max(1, math.ceil(expected / PAGE_SIZE))
     if final_page and len(seen) != expected:
         store.split_partition(partition, "Unique repository count did not match reported total")
@@ -773,7 +840,8 @@ def step_partition(store: Store, client: HttpClient, config: dict) -> bool:
         # A later split must not leave old, superseded page results in the union.
         if final_page:
             for repo in collected_items:
-                store.add_repository(repo, partition["query_index"])
+                store.add_repository(repo, partition["query_index"],
+                                     observed_at=repo.get("_observedAt") or store.get("startedAt"))
         store.db.execute("UPDATE partitions SET expected_count=?,seen_ids=?,items_json=?,page=?,status=? WHERE id=?",
                          (expected, json_text(sorted(seen)), "[]" if final_page else json_text(collected_items),
                           partition["page"] + 1, "done" if final_page else "pending", partition["id"]))
@@ -785,6 +853,83 @@ def cache_fresh(checked_at: str | None, days: float) -> bool:
     return 0 <= age < days * 86400
 
 
+def step_repository_refresh(store: Store, client: HttpClient, config: dict) -> bool:
+    """Refresh admitted repositories without relying on low-star search results.
+
+    Each unit makes one bounded repository API request (with the HTTP client's
+    normal retry budget). The persisted scheduler and oldest-first queue share
+    runtime with discovery, page checks, tags and attribution.
+    """
+    row = store.next_repository_refresh()
+    if row is None:
+        return False
+    previous = json.loads(row["payload"])
+    site = json.loads(row["site"]) if row["site"] else None
+
+    def retire(outcome):
+        with store.db:
+            store.db.execute("""UPDATE repositories SET admitted_at=NULL,site=NULL,
+                outcome=?,checked_scan=?,repository_checked_scan=?,repository_checked_at=?,
+                repository_retry_after=NULL,check_fingerprint=NULL WHERE id=?""",
+                (outcome, store.scan, store.scan, utc_iso(), row["id"]))
+
+    if is_excluded(previous, site.get("url") if site else previous.get("homepage"), config):
+        retire("excluded")
+        return True
+    try:
+        # IDs do not change when a repo is renamed/transferred, and cannot
+        # accidentally refresh a different repository reusing the old name.
+        response = client.github("/repositories/" + quote(row["id"], safe=""))
+        required = {"id", "name", "full_name", "owner", "fork", "private", "license", "stargazers_count"}
+        if (not isinstance(response, dict) or not required.issubset(response)
+                or str(response["id"]) != row["id"]
+                or not response["name"] or not response["full_name"]
+                or not isinstance(response["owner"], dict) or not response["owner"].get("login")
+                or not isinstance(response["fork"], bool) or not isinstance(response["private"], bool)
+                or (response["license"] is not None and not isinstance(response["license"], dict))
+                or not valid_stars(response["stargazers_count"])):
+            raise ValueError("GitHub returned incomplete repository metadata")
+        repo = compact_repository(response)
+    except BudgetExpired:
+        # The row remains due; the already-persisted scheduler turn prevents
+        # this API request from starving other lanes on a short resumed run.
+        raise
+    except HttpFailure as error:
+        if error.status in (404, 410, 451):
+            retire("repository-unavailable")
+            return True
+        if error.status not in (400, 409, 422):
+            # Authentication, rate limits and service failures affect the
+            # batch. Do not silently defer every row behind a broken token.
+            raise
+        with store.db:
+            store.db.execute("UPDATE repositories SET repository_retry_after=? WHERE id=?",
+                             (utc_iso(time.time() + REPOSITORY_REFRESH_SECONDS), row["id"]))
+        return True
+    except (ResponseTooLarge, ValueError, TypeError):
+        # Keep both the last count and its original observation time. Do not
+        # turn an oversized/malformed response into a zero-star count.
+        with store.db:
+            store.db.execute("UPDATE repositories SET repository_retry_after=? WHERE id=?",
+                             (utc_iso(time.time() + REPOSITORY_REFRESH_SECONDS), row["id"]))
+        return True
+    checked_at = utc_iso()
+    with store.db:
+        store.db.execute("""UPDATE repositories SET full_name=?,payload=?,updated_at=?,
+            stars_checked_at=?,repository_checked_at=?,repository_checked_scan=?,
+            repository_retry_after=NULL,checked_scan=NULL WHERE id=?""",
+            (repo["full_name"], json_text(repo), repo.get("updated_at") or repo.get("pushed_at") or repo.get("created_at") or "",
+             checked_at, checked_at, store.scan, row["id"]))
+        if is_excluded(repo, site.get("url") if site else repo.get("homepage"), config):
+            retire("excluded")
+        elif not repository_eligible(repo, admitted=True):
+            retire("no-longer-eligible")
+        elif site and owned_pages_url(site["url"], repo) is None:
+            # A transfer/name change invalidates the old owner's cached Pages URL.
+            store.db.execute("UPDATE repositories SET site=NULL,check_fingerprint=NULL WHERE id=?", (row["id"],))
+    return True
+
+
 def step_check(store: Store, client: HttpClient, config: dict) -> bool:
     row = store.next_check()
     if row is None:
@@ -793,7 +938,7 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
     fingerprint = store.fingerprint(repo)
     if is_excluded(repo, None, config):
         with store.db:
-            store.db.execute("UPDATE repositories SET checked_scan=?,site=NULL,outcome='excluded',check_fingerprint=NULL WHERE id=?", (store.scan, row["id"]))
+            store.db.execute("UPDATE repositories SET checked_scan=?,site=NULL,admitted_at=NULL,outcome='excluded',check_fingerprint=NULL WHERE id=?", (store.scan, row["id"]))
         return True
     # Metadata is checked again on every full scan. Only network verification is cached.
     cache_days = config.get("verificationMaxAgeDays", 7)
@@ -809,8 +954,23 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
     site = None
     outcome = "no-owned-pages-url"
     checked_at = utc_iso()
-    if repository_eligible(repo):
-        readme = client.readme(repo)
+    if repository_eligible(repo, admitted=bool(row["admitted_at"])):
+        try:
+            readme = client.readme(repo)
+        except (HttpFailure, ResponseTooLarge) as error:
+            # These failures belong to this repository, not the batch. Keep
+            # authentication, rate limits and service failures as global pauses.
+            if isinstance(error, HttpFailure) and error.status not in (400, 409, 422, 451):
+                raise
+            with store.db:
+                store.db.execute("""UPDATE repositories SET checked_scan=?,check_fingerprint=?,
+                    checked_at=?,outcome='readme-unavailable' WHERE id=?""",
+                    (store.scan, fingerprint, checked_at, row["id"]))
+            # An unreadable README does not invalidate a previously verified
+            # page. Its existing site and original checkedAt remain unchanged.
+            # The normal unsuccessful-check cache expires within a day, so a
+            # later scan can reconsider the repository without a tight loop.
+            return True
         urls = candidate_urls(repo, readme, include_default=bool(game_evidence(repo, readme)))
         if urls:
             outcome = "pages-unavailable"
@@ -834,6 +994,7 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
                 "id": str(repo["id"]), "repo": repo["full_name"], "name": repo["name"],
                 "description": str(repo.get("description") or "")[:400], "url": final_url,
                 "repoUrl": "https://github.com/" + repo["full_name"], "stars": repo["stargazers_count"],
+                "starsCheckedAt": row["stars_checked_at"],
                 "license": "MIT", "updatedAt": repo.get("updated_at") or repo.get("pushed_at") or repo.get("created_at"),
                 "createdAt": repo.get("created_at"), "checkedAt": checked_at, "signals": signals,
                 "gameEvidence": evidence,
@@ -845,9 +1006,14 @@ def step_check(store: Store, client: HttpClient, config: dict) -> bool:
     with store.db:
         store.db.execute("UPDATE repositories SET checked_scan=?,check_fingerprint=?,checked_at=?,outcome=?,site=? WHERE id=?",
                          (store.scan, fingerprint, checked_at, outcome, json_text(site) if site else None, row["id"]))
-    if site:
-        with store.db:
+        if site:
+            if not row["admitted_at"]:
+                store.db.execute("""UPDATE repositories SET admitted_at=?,repository_checked_scan=?,
+                    repository_checked_at=? WHERE id=?""", (checked_at, store.scan, row["stars_checked_at"], row["id"]))
             store.observe_metadata(row["id"], repo, readme, checked_at)
+        elif outcome in ("excluded", "no-longer-eligible"):
+            store.db.execute("UPDATE repositories SET admitted_at=NULL WHERE id=?", (row["id"],))
+    if site:
         refresh_attribution_state(store, row["id"], config)
     return True
 
@@ -872,6 +1038,12 @@ def step_metadata(store: Store, client: HttpClient) -> bool:
                 snapshot=excluded.snapshot,source_key=excluded.source_key,status='pending'""",
                 (row["id"],json_text(inputs),source_key(repo),json_text(snapshot)))
     warnings = list(snapshot.get("warnings", []))
+    # Older checkpoints marked failed reads as done. Recover those units too,
+    # while retaining successful immutable blobs across retries.
+    failed_paths = {warning.split(":", 1)[1] for warning in warnings
+                    if warning.startswith(("missing-source:", "unreadable-source:"))}
+    if "done" in snapshot:
+        snapshot["done"] = [path for path in snapshot["done"] if path not in failed_paths]
     status = "checked"
     try:
         if not snapshot.get("revision"):
@@ -924,12 +1096,16 @@ def step_metadata(store: Store, client: HttpClient) -> bool:
                     raise ValueError("Blob integrity mismatch")
                 snapshot["files"][path] = content.decode("utf-8")
             except (ValueError, UnicodeError) as error:
+                warnings = [w for w in warnings if w not in ("unreadable-source:" + path, "missing-source:" + path)]
                 warnings.append("unreadable-source:" + path)
             except HttpFailure as error:
                 if error.status not in (404,410):
                     raise
+                warnings = [w for w in warnings if w not in ("unreadable-source:" + path, "missing-source:" + path)]
                 warnings.append("missing-source:" + path)
-            snapshot["done"].append(path)
+            else:
+                warnings = [w for w in warnings if w not in ("unreadable-source:" + path, "missing-source:" + path)]
+                snapshot["done"].append(path)
             snapshot["warnings"] = warnings
             checkpoint()
     except BudgetExpired:
@@ -1009,7 +1185,7 @@ def manifest_metadata(store: Store, config: dict) -> dict:
         "matchedRepositories": counts["discoveredRepositories"] if search_complete else None,
         **counts, "complete": complete,
         "reportedMatchesByQuery": list(store.get("reportedMatchesByQuery", {}).values()),
-        "coverageNote": "Search results change during collection. Prior verified sites remain available while a refresh is incomplete; carriedForwardSites counts those not yet rechecked. HTML reachability and phrase signals do not prove playability.",
+        "coverageNote": "Search results change during collection. Previously admitted repositories remain eligible after gaining stars and are refreshed independently. Prior verified sites remain available while a refresh is incomplete; carriedForwardSites counts those not yet rechecked. Stars are last observed counts, not live values; starsCheckedAt is null when the observation time is unknown. HTML reachability and phrase signals do not prove playability.",
         "attributionScope": ATTRIBUTION_SCOPE,
     }
 
@@ -1029,15 +1205,17 @@ def step_collection(store: Store, client: HttpClient, config: dict) -> bool:
     turn = store.get("workTurn", 0)
     with store.db:
         store.put("workTurn", turn + 1)
-    lanes = (("check",) * 8 + ("metadata", "discover"))
+    lanes = (("check",) * 8 + ("metadata", "discover", "stars", "attribution"))
     actions = {"check": lambda: step_check(store, client, config),
                "metadata": lambda: step_metadata(store, client),
-               "discover": lambda: step_partition(store, client, config)}
-    order = [lanes[turn % len(lanes)], "check", "metadata", "discover"]
+               "discover": lambda: step_partition(store, client, config),
+               "stars": lambda: step_repository_refresh(store, client, config),
+               "attribution": lambda: step_attribution(store, client)}
+    order = [lanes[turn % len(lanes)], "check", "metadata", "discover", "stars", "attribution"]
     for lane in dict.fromkeys(order):
         if actions[lane]():
             return True
-    return step_attribution(store, client)
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1046,7 +1224,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=Path("site/data"))
     parser.add_argument("--config", type=Path, default=Path("config/search.json"))
     parser.add_argument("--max-seconds", type=float, default=1200, help="Checkpoint before this runtime budget is exhausted")
-    parser.add_argument("--refresh", action="store_true", help="Start a full new scan; reuse recent network checks and retire missing repositories when complete")
+    parser.add_argument("--refresh", action="store_true", help="Start a full new scan; reuse recent page checks and independently refresh admitted repositories")
     parser.add_argument("--export-only", action="store_true", help="Export existing SQLite state without network calls")
     parser.add_argument("--retry-unresolved", action="store_true", help="Retry unresolved one-second partitions from a previous run")
     parser.add_argument("--require-complete", action="store_true", help="Return exit code 2 if the exported scan is still partial")

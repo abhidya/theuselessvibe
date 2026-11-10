@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import export_catalog as exporter
+from check_export import check
 
 
 def metadata(**extra):
@@ -95,6 +96,7 @@ class ExportCatalogTests(unittest.TestCase):
             'scanFinishedAt': None,
             'reportedMatchesByQuery': [{'query': 'game', 'count': 38, 'incomplete': False}],
             'attributionScope': 'Latest 30 commits and recent pull requests',
+            'pendingStarRefreshes': 12, 'pendingScanStarRefreshes': 5, 'unavailableStarRefreshes': 2,
         }
         manifest = exporter.export_catalog([], metadata(**lifecycle), self.directory)
         for key, value in lifecycle.items():
@@ -131,6 +133,66 @@ class ExportCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             exporter.export_catalog([site(1), site(1)], metadata(), self.directory)
         self.assertEqual(self.read('manifest.json'), original)
+
+    def test_popularity_is_global_across_shards_with_deterministic_ties(self):
+        sites = [site(i, stars=i % 7) for i in range(300)]
+        sites.extend([site('most-popular', stars=1000, updatedAt='2020-01-01T00:00:00Z'),
+                      site('unknown', stars=None),
+                      site('recent-tie', stars=6, updatedAt='2026-11-07T00:00:00Z')])
+        manifest = exporter.export_catalog(sites, metadata(), self.directory)
+        self.assertEqual(manifest['sort'], 'stars-desc')
+        index = self.read(manifest['indexKey'])
+        self.assertEqual(index[0]['id'], 'most-popular')
+        self.assertEqual(index[1]['id'], 'recent-tie')
+        self.assertEqual(index[-1]['id'], 'unknown')
+        self.assertEqual(index[-1]['stars'], None)
+        self.assertEqual(index[-1]['starsCheckedAt'], None)
+        self.assertEqual(index[-2]['stars'], 0)
+        details = [entry for shard in manifest['shards'] for entry in self.read(shard['key'])]
+        self.assertEqual([row['id'] for row in index], [row['id'] for row in details])
+        self.assertEqual(details, sorted(details, key=exporter.popularity_key, reverse=True))
+        self.assertEqual(manifest, exporter.export_catalog(list(reversed(sites)), metadata(), self.directory))
+        check(self.directory)
+
+    def test_star_observations_are_in_index_and_detail_without_invented_freshness(self):
+        manifest = exporter.export_catalog([
+            site('known', stars=120, starsCheckedAt='2026-11-06T01:00:00Z'),
+            site('legacy', stars=10), site('unknown', stars=None),
+        ], metadata(), self.directory)
+        index = self.read(manifest['indexKey'])
+        details = self.read(manifest['shards'][0]['key'])
+        for summary, detail in zip(index, details):
+            self.assertEqual(summary['stars'], detail['stars'])
+            self.assertEqual(summary['starsCheckedAt'], detail['starsCheckedAt'])
+        self.assertEqual(index[0]['starsCheckedAt'], '2026-11-06T01:00:00Z')
+        self.assertIsNone(index[1]['starsCheckedAt'])
+        self.assertIsNone(index[2]['stars'])
+        check(self.directory)
+
+    def test_export_validation_rejects_inconsistent_index_counts_and_order(self):
+        manifest = exporter.export_catalog([site(1, stars=50), site(2, stars=0)], metadata(), self.directory)
+        index = self.read(manifest['indexKey'])
+        index[0]['stars'] = 49
+        (self.directory / manifest['indexKey']).write_text(json.dumps(index))
+        with self.assertRaisesRegex(AssertionError, 'star count mismatch'):
+            check(self.directory)
+        index[0]['stars'] = 50
+        (self.directory / manifest['indexKey']).write_text(json.dumps(index))
+        shard_path = self.directory / manifest['shards'][0]['key']
+        shard_path.write_text(json.dumps(list(reversed(self.read(manifest['shards'][0]['key'])))))
+        with self.assertRaisesRegex(AssertionError, 'ordering mismatch'):
+            check(self.directory)
+
+    def test_legacy_catalog_without_sort_or_index_stars_remains_valid(self):
+        values = [site(1, stars=0), site(2, stars=1)]
+        values.sort(key=lambda value: (value['updatedAt'], value['id']), reverse=True)
+        legacy = metadata(schemaVersion=1, complete=False, eligibleSites=2,
+                          shards=[{'key': 'legacy.json', 'count': 2}], indexKey='index.json')
+        (self.directory / 'manifest.json').write_text(json.dumps(legacy))
+        (self.directory / 'legacy.json').write_text(json.dumps(values))
+        (self.directory / 'index.json').write_text(json.dumps([
+            {'id': value['id'], 'index': position} for position, value in enumerate(values)]))
+        check(self.directory)
 
 
 if __name__ == '__main__':

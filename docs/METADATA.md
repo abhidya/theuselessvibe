@@ -45,7 +45,7 @@ Each successful website check immediately computes low-cost topic/README/languag
 
 Successful network units are checkpointed before the next request. Budget/rate-limit pauses propagate to the existing resumable runner. Changed pushed/default-branch inputs invalidate the snapshot. A rules-version change reapplies rules to cached immutable blobs rather than refetching unchanged source. Other inspection failures retain the accepted website, mark metadata partial and defer retries for a day instead of looping. Existing code already handles GitHub's rate-limit headers and budgets; this feature does not raise concurrency or attempt to bypass limits.
 
-A persisted ten-turn schedule gives eight turns to pending website checks, one to source metadata, and one to discovery. Empty lanes yield to useful pending work. Optional Codex/Claude attribution stays last. This prevents both the large candidate backlog and new discovery from monopolizing every batch.
+A persisted twelve-turn schedule gives eight turns to pending website checks, then one each to source metadata, discovery, current-star refreshes and optional Codex/Claude attribution. Empty lanes yield to useful pending work. This prevents both the large candidate backlog and new discovery from monopolizing every batch.
 
 The manifest reports `pendingMetadataChecks`, `metadataCheckedSites`, and `metadataPartialSites` separately. `checked` means the bounded source pass completed, not that every field is known or that the game was played. The existing `complete` flag retains its collection meaning; it is not a blanket metadata/playability guarantee.
 

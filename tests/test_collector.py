@@ -8,11 +8,11 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from collect import (Budget, BudgetExpired, CollectorError, HttpClient, HttpFailure,
+from collect import (Budget, BudgetExpired, CollectorError, HttpClient, HttpFailure, ResponseTooLarge,
                      Store, candidate_urls, detect_signals, exclusion_url, is_excluded,
                      load_config, manifest_metadata, owned_pages_url, partition_query,
                      search_queries, split_range, step_attribution, step_check,
-                     step_partition, utc_iso, visible_text)
+                     step_partition, step_repository_refresh, utc_iso, visible_text)
 
 
 CONFIG = {
@@ -172,6 +172,70 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual(site["agents"], [])
         self.assertEqual(self.store.counts()["unavailableAttributionChecks"], 1)
 
+    def test_repository_readme_failure_does_not_block_later_checks(self):
+        for failure in (HttpFailure(451), HttpFailure(409), ResponseTooLarge("too large")):
+            with self.subTest(failure=type(failure).__name__):
+                store = Store(":memory:")
+                self.addCleanup(store.db.close)
+                store.start(CONFIG, now=1000)
+                with store.db:
+                    store.add_repository(repository(1), 0)
+                    store.add_repository(repository(2), 0)
+                client = FakeClient()
+                original = client.readme
+                def readme(repo):
+                    if repo["id"] == 1:
+                        raise failure
+                    return original(repo)
+                client.readme = readme
+                self.assertTrue(step_check(store, client, CONFIG))
+                self.assertEqual(store.next_check()["id"], "2")
+                self.assertTrue(step_check(store, client, CONFIG))
+                self.assertIsNone(store.next_check())
+                self.assertEqual([site["id"] for site in store.sites()], ["2"])
+                # A subsequent scan retries after the negative cache expires.
+                store.start(CONFIG, refresh=True, now=1001)
+                with store.db:
+                    store.add_repository(repository(1), 0)
+                    store.db.execute("UPDATE repositories SET checked_at='2000-01-01T00:00:00Z' WHERE id='1'")
+                client.readme = original
+                self.assertTrue(step_check(store, client, CONFIG))
+                self.assertIn("1", [site["id"] for site in store.sites()])
+
+    def test_readme_failure_preserves_previous_site_without_claiming_recheck(self):
+        self.seed(); client = FakeClient()
+        step_check(self.store, client, CONFIG)
+        previous = self.store.sites()[0]
+        self.store.start(CONFIG, refresh=True, now=1001)
+        self.seed()
+        with self.store.db:
+            self.store.db.execute("UPDATE repositories SET checked_at='2000-01-01T00:00:00Z'")
+        def unavailable(_): raise HttpFailure(409)
+        client.readme = unavailable
+        self.assertTrue(step_check(self.store, client, CONFIG))
+        self.assertIsNone(self.store.next_check())
+        current = self.store.sites()[0]
+        self.assertEqual({k: v for k, v in current.items() if k != 'starsCheckedAt'},
+                         {k: v for k, v in previous.items() if k != 'starsCheckedAt'})
+        self.assertEqual(self.store.counts()['currentScanEligibleSites'], 0)
+        self.assertEqual(self.store.counts()['carriedForwardSites'], 1)
+        self.assertEqual(client.page_calls, 1)
+        # Exclusions still take precedence over preservation.
+        self.store.apply_exclusions(dict(CONFIG, exclusions={'repositories':['alice1/game']}))
+        self.assertEqual(self.store.sites(), [])
+
+    def test_readme_global_failures_still_pause_without_checkpointing(self):
+        self.seed()
+        client = FakeClient()
+        for failure in (HttpFailure(401), HttpFailure(403), HttpFailure(429),
+                        HttpFailure(503), BudgetExpired("pause"), CollectorError("network unavailable")):
+            def readme(_):
+                raise failure
+            client.readme = readme
+            with self.assertRaises(type(failure)):
+                step_check(self.store, client, CONFIG)
+            self.assertEqual(self.store.next_check()["id"], "1")
+
     def test_refresh_reuses_recent_checks_and_retires_deleted_repos(self):
         self.seed()
         client = FakeClient()
@@ -185,6 +249,11 @@ class CollectorTest(unittest.TestCase):
         self.assertIsNone(self.store.next_attribution())
         self.store.start(CONFIG, refresh=True, now=1002)
         step_partition(self.store, FakeClient([result([])]), CONFIG)
+        # Missing search results cannot distinguish growth from deletion.
+        self.assertFalse(self.store.finish_if_complete())
+        def missing(*_): raise HttpFailure(404)
+        client.github = missing
+        step_repository_refresh(self.store, client, CONFIG)
         self.assertTrue(self.store.finish_if_complete())
         self.assertEqual(self.store.sites(), [])
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM repositories").fetchone()[0], 0)
@@ -222,23 +291,29 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual(counts["eligibleSites"], 1)
         self.assertEqual(counts["currentScanEligibleSites"], 0)
         self.assertEqual(counts["carriedForwardSites"], 1)
-        # No matches in the completed replacement scan retires the old URL.
+        # A graduated game no longer matches discovery, but is refreshed by ID.
         step_partition(self.store, FakeClient([result([])]), CONFIG)
+        client.github = lambda *_: repository(stargazers_count=42)
+        step_repository_refresh(self.store, client, CONFIG)
+        step_check(self.store, client, CONFIG)
         metadata = manifest_metadata(self.store, CONFIG)
         self.assertTrue(metadata["complete"])
-        self.assertEqual(metadata["eligibleSites"], 0)
+        self.assertEqual(metadata["eligibleSites"], 1)
         self.assertEqual(metadata["carriedForwardSites"], 0)
-        self.assertEqual(self.store.sites(), [])
+        self.assertEqual(self.store.sites()[0]["stars"], 42)
+        self.assertEqual(metadata["discoveredRepositories"], 0)
 
-    def test_changed_stars_remove_a_cached_site(self):
+    def test_changed_stars_retain_a_previously_admitted_site(self):
         self.seed()
         client = FakeClient()
         step_check(self.store, client, CONFIG)
         self.store.start(CONFIG, refresh=True, now=1001)
         with self.store.db:
             self.store.add_repository(repository(stargazers_count=2), 0)
-        self.assertEqual(self.store.sites(), [])
-        self.assertIsNone(self.store.next_check())
+        self.assertEqual(self.store.sites()[0]["stars"], 2)
+        step_check(self.store, client, CONFIG)
+        self.assertEqual(client.readme_calls, 1)
+        self.assertEqual(self.store.sites()[0]["stars"], 2)
 
     def test_exclusions_survive_resume_and_refresh(self):
         self.seed()

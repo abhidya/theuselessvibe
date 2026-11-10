@@ -13,7 +13,7 @@ Open **Room** in the collection header. Enter a code such as `PIZZA`, or follow 
 
 ## Ordering and catalog changes
 
-The browser loads the existing compact catalog index, assigns each game a SHA-256 rank from `['room-v1', normalizedCode, gameId]`, then sorts those ranks with a deterministic ID tie-break. This is a repeatable permutation, not a random call on each click. Sorting does not depend on locale or the server's newest-first order. The positive modulo operation wraps manual indices in both directions. Details are loaded lazily using the existing catalog adapter; game content is not downloaded upfront or mirrored.
+The browser loads the existing compact catalog index, assigns each game a SHA-256 rank from `['room-v1', normalizedCode, gameId]`, then sorts those ranks with a deterministic ID tie-break. This is a repeatable permutation, not a random call on each click. Sorting does not depend on locale or the directory's star ranking. The positive modulo operation wraps manual indices in both directions. Details are loaded lazily using the existing catalog adapter; game content is not downloaded upfront or mirrored.
 
 A room is scoped to a catalog edition. Sharing pins the existing edition identifier. The adapter checks the edition and selected game ID again before displaying details. If a new deployment retires an edition, the page stops rather than silently selecting a different game and offers **Join the current catalog edition**. Share the resulting new link with the group. Old editions are not archived indefinitely by this feature. Entering only a bare code uses the current edition; people on different editions must rejoin together to have the same positions.
 

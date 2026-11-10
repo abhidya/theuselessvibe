@@ -34,6 +34,13 @@ export async function checkBrowserCatalog(directory) {
   const response = await fetcher(origin + prefix + manifest.indexKey);
   assert(response.ok, 'Missing compact index');
   const index = await response.json();
+  // Browse order is independent of physical shard positions. Missing legacy
+  // counts are unknown and rank after known zeroes, with index order for ties.
+  const ranked = [...index].sort((a, b) => {
+    if (a.stars == null) return b.stars == null ? a.index - b.index : 1;
+    if (b.stars == null) return -1;
+    return b.stars - a.stars || a.index - b.index;
+  });
   const ids = new Set();
   for (let offset = 0; offset < stats.eligibleSites; offset += 50) {
     try {
@@ -41,7 +48,10 @@ export async function checkBrowserCatalog(directory) {
       assert.equal(page.total, stats.eligibleSites);
       assert.equal(page.sites.length, Math.min(50, stats.eligibleSites - offset));
       for (const [n, site] of page.sites.entries()) {
-        assert.equal(site.id, index[offset + n].id, `Index/detail mismatch at ${offset + n}`);
+        const entry = ranked[offset + n];
+        assert.equal(site.id, entry.id, `Index/detail mismatch at ranked offset ${offset + n}`);
+        if (Object.hasOwn(entry, 'stars')) assert.equal(site.stars, entry.stars, `Star-count mismatch for ${site.id}`);
+        if (Object.hasOwn(entry, 'starsCheckedAt')) assert.equal(site.starsCheckedAt, entry.starsCheckedAt, `Star-check timestamp mismatch for ${site.id}`);
         assert(!ids.has(site.id), `Duplicate site ${site.id}`);
         ids.add(site.id);
       }
