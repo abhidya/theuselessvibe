@@ -8,6 +8,7 @@ import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
+import time
 from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright, expect
 
@@ -34,6 +35,31 @@ FILES = {'manifest.json': MANIFEST, 'ui-test/index.json': INDEX, 'ui-test/0000.j
 
 class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *_): pass
+
+def browser_evidence(context, tag):
+    """Keep browser/process failures observable without changing navigation rules."""
+    events = []
+    started = time.monotonic()
+    def record(kind, **values):
+        entry = dict(elapsed=round(time.monotonic() - started, 3), event=kind, **values)
+        events.append(entry)
+        print('BROWSER', tag, json.dumps(entry), flush=True)
+    # pagehide/pageshow listeners do not disqualify a document from the back/forward
+    # cache. Do not add beforeunload/unload listeners while diagnosing its lifecycle.
+    context.add_init_script("""for (const type of ['pagehide', 'pageshow', 'DOMContentLoaded', 'load']) {
+        window.addEventListener(type, event => console.debug('__vibe_ui__' + JSON.stringify({
+            type, url: location.href, top: window === window.top, persisted: event.persisted ?? null
+        })));
+    }""")
+    def watch(page):
+        page.on('crash', lambda _: record('crash', url=page.url))
+        page.on('pageerror', lambda error: record('pageerror', error=str(error)))
+        page.on('requestfailed', lambda request: record('requestfailed', url=request.url, error=request.failure))
+        page.on('framenavigated', lambda frame: record('framenavigated', url=frame.url, top=frame == page.main_frame))
+        page.on('console', lambda message: record('console', type=message.type, text=message.text)
+                if message.text.startswith('__vibe_ui__') or message.type == 'error' else None)
+    context.on('page', watch)
+    return events
 
 def fixtures(context):
     def catalog(route):
@@ -70,11 +96,12 @@ def geometry(page, ids, frame_id):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Horizontal overflow'
 
 def exercise(browser, name, base, width, height):
+    tag = f'{name}-{width}x{height}'
     context = browser.new_context(viewport={'width': width, 'height': height})
+    events = browser_evidence(context, tag)
     fixtures(context)
     page = context.new_page(); errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    tag = f'{name}-{width}x{height}'
     try:
         page.goto(base)
         expect(page.locator('.site-card')).to_have_count(3)
@@ -130,6 +157,7 @@ def exercise(browser, name, base, width, height):
         page.locator('#random-button').click(); expect(page.locator('#game-player')).to_be_visible()
         geometry(page, ['player-previous', 'player-history', 'player-next'], '#player-frame')
         # The room implementation is preserved and still navigates independently.
+        print('NAVIGATION', tag, 'active solo player -> room', page.url, flush=True)
         page.goto(base + 'room.html?room=PIZZA')
         expect(page.locator('#frame-host iframe')).to_be_visible()
         first = page.locator('#game-title').inner_text()
@@ -147,7 +175,9 @@ def exercise(browser, name, base, width, height):
         except Exception as screenshot_error:
             print(f'Screenshot unavailable ({type(screenshot_error).__name__}); preserving original test failure.', flush=True)
         raise
-    finally: context.close()
+    finally:
+        (OUT / f'{tag}-events.json').write_text(json.dumps(events, indent=2))
+        context.close()
 
 def run():
     OUT.mkdir(exist_ok=True)

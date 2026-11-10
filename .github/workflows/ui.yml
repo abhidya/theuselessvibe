@@ -1,7 +1,7 @@
 name: UI browser checks
 on:
   pull_request:
-    paths: ['site/**', 'tests/ui_smoke.py', '.github/workflows/ui.yml']
+    paths: ['site/**', 'tests/ui_smoke.py', 'tests/ui_navigation.py', '.github/workflows/ui.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,7 +18,14 @@ jobs:
           python -m pip install --disable-pip-version-check playwright==1.56.0
           python -m playwright install --with-deps chromium webkit
       - name: Check real layouts and interactions with fixture games
+        env:
+          DEBUG: pw:browser
         run: python tests/ui_smoke.py
+      - name: Isolate WebKit navigation after a failed browser check
+        if: failure()
+        env:
+          DEBUG: pw:browser
+        run: python tests/ui_navigation.py
       - name: Save UI screenshots and test report
         if: always()
         uses: actions/upload-artifact@v7
