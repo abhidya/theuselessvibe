@@ -15,7 +15,7 @@ jobs:
           python-version: '3.12'
       - name: Install browser test dependencies
         run: |
-          python -m pip install --disable-pip-version-check playwright==1.56.0
+          python -m pip install --disable-pip-version-check playwright==1.65.0
           python -m playwright install --with-deps chromium webkit
       - name: Check real layouts and interactions with fixture games
         env:
