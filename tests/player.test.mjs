@@ -18,6 +18,21 @@ test('Previous History Next have a separate navigation row, not a crowded header
   for (const id of ['player-star', 'player-report', 'player-direct']) assert.ok(!nav.includes(`id="${id}"`));
   assert.equal((nav.match(/<button/g) || []).length, 3);
 });
+test('GitHub star links are visible player-header actions with safe, announced new tabs', () => {
+  for (const [source, id, dialogId] of [[html, 'player-star', 'player-more-dialog'], [read('../site/room.html'), 'star-repo', 'more-dialog']]) {
+    const header = source.match(/<header class="room-header[\s\S]*?<\/header>/)[0];
+    const link = header.match(new RegExp(`<a id="${id}"[^>]+>[^<]*<\\/a>`))?.[0];
+    assert.ok(link, `${id} is present in the player header`);
+    assert.match(link, /Star on GitHub/);
+    assert.match(link, /target="_blank"/);
+    assert.match(link, /rel="noopener noreferrer"/);
+    assert.match(link, /aria-label="[^"]*opens in a new tab/);
+    const more = source.match(new RegExp(`<dialog id="${dialogId}"[\\s\\S]*?<\\/dialog>`))[0];
+    assert.ok(!more.includes(`id="${id}"`), 'Do not duplicate the star link in More');
+  }
+  const room = read('../site/rooms/page.js');
+  assert.match(room, /\$\('star-repo'\)\.hidden = !view.site/);
+});
 test('secondary actions and history use native modal dialogs; help never covers iframe', () => {
   assert.match(html, /<dialog id="player-more-dialog"/);
   assert.match(html, /<dialog id="player-history-drawer"/);

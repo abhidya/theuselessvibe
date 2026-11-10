@@ -21,7 +21,7 @@ A room is scoped to a catalog edition. Sharing pins the existing edition identif
 
 `site/room.html` is a separate room player linked from the collection header. The existing solo discovery flow and collector are unchanged. The room page uses pinned Bootstrap 5.3.8 CSS from jsDelivr, with the official subresource-integrity hash, plus a small layout stylesheet. Native dialogs provide the room settings, history and secondary game actions. The three navigation buttons occupy a separate bottom row; no permanent help banner covers the game.
 
-Room data and links are public, not private authenticated rooms. The code selects an ordering; it is not an access credential. External games stay sandboxed, without top-level navigation permissions. Same-origin games additionally omit `allow-same-origin`. Open directly, GitHub Star, and Report/removal remain in More. Nothing is starred or reported automatically.
+Room data and links are public, not private authenticated rooms. The code selects an ordering; it is not an access credential. External games stay sandboxed, without top-level navigation permissions. Same-origin games additionally omit `allow-same-origin`. Star on GitHub is visible in the player header and opens the repository in a new tab; sign in if needed, then click GitHub’s Star button. Open directly and Report/removal remain in More. Nothing is starred or reported automatically.
 
 ## Verification
 
