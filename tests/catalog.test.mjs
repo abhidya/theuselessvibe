@@ -56,6 +56,49 @@ function fixture(sites = Array.from({ length: 260 }, (_, i) => site(i)), generat
 }
 const rejectCatalog = (promise) => assert.rejects(promise, (error) => error instanceof CatalogError && error.code === 'CATALOG_UNAVAILABLE');
 
+test('existing owners ending in hyphens work across Browse, filters, random and rooms', async () => {
+  for (const owner of ['Kline-', 'a-', 'a'.repeat(38) + '-']) {
+    const repo = `${owner}/gamedb`;
+    const url = `https://${owner.toLowerCase()}.github.io/gamedb/`;
+    const data = fixture([site(0, {
+      repo, repoUrl: `https://github.com/${repo}`, url,
+      agentEvidence: [{agent: 'codex', kind: 'page', label: 'Public page evidence', url}],
+    })]);
+    const adapter = createCatalog(data.options);
+    assert.equal((await adapter.loadSites()).sites[0].repo, repo);
+    assert.equal((await adapter.loadSites({query: owner})).sites[0].url, url);
+    assert.equal((await adapter.randomSite()).site.repo, repo);
+    assert.equal((await adapter.randomSite({query: owner})).site.repo, repo);
+    const room = await loadRoomCatalog({adapter, fetcher: data.options.fetcher, baseUrl: data.options.baseUrl});
+    assert.equal((await room.siteFor(room.entries[0])).repo, repo);
+  }
+});
+
+test('owner validation still rejects malformed repository identifiers in index and details', async () => {
+  for (const owner of ['', '-alice', 'alice_name', 'alice.name', 'alice/name', 'alice@other', 'alice ', 'a'.repeat(40)]) {
+    for (const key of ['v1/index.json', 'v1/0000.json']) {
+      const data = fixture([site(0)]);
+      data.files.get(key)[0].repo = `${owner}/gamedb`;
+      await rejectCatalog(createCatalog(data.options).loadSites());
+    }
+  }
+});
+
+test('trailing-hyphen owners retain exact Pages origin and source repository checks', async () => {
+  const repo = 'Kline-/gamedb';
+  const valid = {repo, repoUrl: `https://github.com/${repo}`, url: 'https://kline-.github.io/gamedb/'};
+  for (const change of [
+    ...['https://kline.github.io/gamedb/', 'https://kline-.github.io.example/gamedb/',
+      'https://kline-.github.io:443/gamedb/', 'https://user@kline-.github.io/gamedb/',
+      'http://kline-.github.io/gamedb/'].map(url => ({url})),
+    {repoUrl: 'https://github.com/Kline/gamedb'},
+    {agentEvidence: [{agent: 'codex', kind: 'page', label: 'Invalid origin', url: 'https://kline-.github.io.example/gamedb/'}]},
+  ]) {
+    const data = fixture([site(0, {...valid, ...change})]);
+    await rejectCatalog(createCatalog(data.options).loadSites());
+  }
+});
+
 test('Browse loads the full compact index and stats expose coverage without shard internals', async () => {
   const data = fixture();
   const api = createCatalog(data.options);
@@ -382,6 +425,8 @@ test('pre-publish check verifies globally ranked pages and index/detail star agr
   const data = fixture(Array.from({length: 260}, (_, i) => site(i, {
     stars: i % 17 === 0 ? null : i % 43,
     starsCheckedAt: i % 17 === 0 ? null : DATE,
+    ...(i === 258 ? {repo: 'Kline-/gamedb', repoUrl: 'https://github.com/Kline-/gamedb',
+      url: 'https://kline-.github.io/gamedb/'} : {}),
   })));
   const directory = await mkdtemp(path.join(tmpdir(), 'vibe-stars-'));
   try {

@@ -349,6 +349,14 @@ class CollectorTest(unittest.TestCase):
 
 
 class URLAndSignalTests(unittest.TestCase):
+    def test_existing_trailing_hyphen_owner_keeps_owned_pages_links(self):
+        repo = repository(name="gamedb", full_name="Kline-/gamedb", owner={"login": "Kline-"},
+                          homepage="https://Kline-.github.io/gamedb/")
+        self.assertEqual(candidate_urls(repo), ["https://kline-.github.io/gamedb/"])
+        for bad in ("https://kline.github.io/gamedb/", "https://kline-.github.io.example/gamedb/",
+                    "https://kline-.github.io/another-game/"):
+            self.assertIsNone(owned_pages_url(bad, repo), bad)
+
     def test_only_owned_repo_pages_are_allowed(self):
         repo = repository()
         self.assertEqual(owned_pages_url("https://ALICE1.github.io/game/#start", repo), "https://alice1.github.io/game/")
