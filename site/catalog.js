@@ -8,7 +8,10 @@ import {parseMetadata, metadataFilters, hasMetadataFilters, matchesMetadata, fac
 const MANIFEST_TTL_MS = 30_000;
 const MAX_CACHED_SHARDS = 8;
 const UINT32_RANGE = 0x1_0000_0000;
-const OWNER = '[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?';
+// Validate existing API-returned owners, not GitHub's new-account signup rules:
+// historical logins such as Kline- end in a hyphen. Share this bounded pattern
+// across repository names and Pages hosts; exact owner/origin checks stay below.
+const OWNER = '[a-z0-9][a-z0-9-]{0,38}';
 const REPOSITORY = new RegExp(`^(${OWNER})/([a-z0-9._-]{1,100})$`, 'i');
 const PAGES_HOST = new RegExp(`^${OWNER}\\.github\\.io$`, 'i');
 
